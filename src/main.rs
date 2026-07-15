@@ -486,6 +486,13 @@ fn render_bash_result(outcome: &pi::BashOutcome) -> String {
     rendered
 }
 
+fn plain_thinking(text: &str) -> &str {
+    let text = text.trim();
+    let text = text.strip_prefix("**").unwrap_or(text);
+    let text = text.strip_suffix("**").unwrap_or(text);
+    text.trim()
+}
+
 #[component]
 fn TranscriptEntry(item: TranscriptItem) -> Element {
     match item {
@@ -496,9 +503,12 @@ fn TranscriptEntry(item: TranscriptItem) -> Element {
         TranscriptItem::Assistant(text) => rsx! {
             pre { class: "assistant-message", "{text}" }
         },
-        TranscriptItem::Thinking { text, .. } => rsx! {
-            pre { class: "assistant-message thinking-message", "Thinking\n{text}" }
-        },
+        TranscriptItem::Thinking { text, .. } => {
+            let text = plain_thinking(&text);
+            rsx! {
+                pre { class: "assistant-message thinking-message", "{text}" }
+            }
+        }
         TranscriptItem::Tool {
             summary,
             state,
@@ -726,8 +736,8 @@ fn App() -> Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolState, TranscriptItem, apply_stream_event, fail_active_tools, push_shell,
-        render_bash_result, tool_summary, update_shell,
+        ToolState, TranscriptItem, apply_stream_event, fail_active_tools, plain_thinking,
+        push_shell, render_bash_result, tool_summary, update_shell,
     };
     use crate::pi::{BashOutcome, StreamEvent};
     use serde_json::json;
@@ -840,6 +850,18 @@ mod tests {
         assert_eq!(
             transcript[4],
             TranscriptItem::Assistant("Finished.".to_owned())
+        );
+    }
+
+    #[test]
+    fn strips_thinking_emphasis_markers() {
+        assert_eq!(
+            plain_thinking("**Checking the details.**"),
+            "Checking the details."
+        );
+        assert_eq!(
+            plain_thinking("Checking **literal** details."),
+            "Checking **literal** details."
         );
     }
 
