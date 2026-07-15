@@ -4051,6 +4051,7 @@ name = "spigot"
 version = "0.1.0"
 dependencies = [
  "dioxus",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "tokio",

@@ -29,6 +29,8 @@ SPIGOT_PROMPT_TIMEOUT_SECS=3600 cargo run
 
 Type a normal message to prompt Pi. Thinking output appears when the selected model supports it and Pi's thinking level is not `off`. Prefix input with `!` to run a shell command in the agent working directory; its output is added to Pi's context. Use `!!` to run a command without adding its output to the context. Commands run with the same permissions as Spigot.
 
+On macOS, press Command-T to open an independent Pi session in a native window tab.
+
 ## Validate
 
 ```sh

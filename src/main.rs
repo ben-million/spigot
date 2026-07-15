@@ -6,6 +6,18 @@ use std::rc::Rc;
 
 static INTER_FONT: Asset = asset!("/assets/InterVariable.woff2");
 
+#[cfg(target_os = "macos")]
+const NEW_TAB_MENU_ID: &str = "spigot-new-tab";
+#[cfg(target_os = "macos")]
+const CLOSE_TAB_MENU_ID: &str = "spigot-close-tab";
+#[cfg(target_os = "macos")]
+const TABBING_IDENTIFIER: &str = "spigot";
+
+#[cfg(target_os = "macos")]
+std::thread_local! {
+    static NATIVE_MENU: dioxus::desktop::muda::Menu = native_menu();
+}
+
 const APP_STYLE: &str = r#"
     :root {
         color-scheme: light dark;
@@ -551,21 +563,196 @@ fn TranscriptEntry(item: TranscriptItem) -> Element {
     }
 }
 
-fn main() {
-    dioxus::LaunchBuilder::desktop()
-        .with_cfg(
-            dioxus::desktop::Config::new().with_window(
-                dioxus::desktop::WindowBuilder::new()
-                    .with_title("Spigot")
-                    .with_inner_size(LogicalSize::new(1095.0, 760.0))
-                    .with_min_inner_size(LogicalSize::new(420.0, 360.0)),
+fn window_builder() -> dioxus::desktop::WindowBuilder {
+    let builder = dioxus::desktop::WindowBuilder::new()
+        .with_title("Spigot")
+        .with_inner_size(LogicalSize::new(1095.0, 760.0))
+        .with_min_inner_size(LogicalSize::new(420.0, 360.0));
+
+    #[cfg(target_os = "macos")]
+    let builder = {
+        use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS;
+
+        builder
+            .with_automatic_window_tabbing(false)
+            .with_tabbing_identifier(TABBING_IDENTIFIER)
+    };
+
+    builder
+}
+
+#[cfg(target_os = "macos")]
+fn native_menu() -> dioxus::desktop::muda::Menu {
+    use dioxus::desktop::muda::{
+        Menu, MenuItem, PredefinedMenuItem, Submenu,
+        accelerator::{Accelerator, CMD_OR_CTRL, Code},
+    };
+
+    let menu = Menu::new();
+
+    let app_menu = Submenu::new("Spigot", true);
+    app_menu
+        .append_items(&[
+            &PredefinedMenuItem::about(None, None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::services(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::hide(None),
+            &PredefinedMenuItem::hide_others(None),
+            &PredefinedMenuItem::show_all(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::quit(None),
+        ])
+        .expect("the native application menu should be valid");
+
+    let file_menu = Submenu::new("File", true);
+    file_menu
+        .append_items(&[
+            &MenuItem::with_id(
+                NEW_TAB_MENU_ID,
+                "New Tab",
+                true,
+                Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyT)),
             ),
-        )
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id(
+                CLOSE_TAB_MENU_ID,
+                "Close Tab",
+                true,
+                Some(Accelerator::new(Some(CMD_OR_CTRL), Code::KeyW)),
+            ),
+        ])
+        .expect("the native File menu should be valid");
+
+    let edit_menu = Submenu::new("Edit", true);
+    edit_menu
+        .append_items(&[
+            &PredefinedMenuItem::undo(None),
+            &PredefinedMenuItem::redo(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::cut(None),
+            &PredefinedMenuItem::copy(None),
+            &PredefinedMenuItem::paste(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::select_all(None),
+        ])
+        .expect("the native Edit menu should be valid");
+
+    let window_menu = Submenu::new("Window", true);
+    window_menu
+        .append_items(&[
+            &PredefinedMenuItem::minimize(None),
+            &PredefinedMenuItem::maximize(None),
+            &PredefinedMenuItem::fullscreen(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::bring_all_to_front(None),
+        ])
+        .expect("the native Window menu should be valid");
+
+    menu.append_items(&[&app_menu, &file_menu, &edit_menu, &window_menu])
+        .expect("the native menu bar should be valid");
+    menu.init_for_nsapp();
+    window_menu.set_as_windows_menu_for_nsapp();
+
+    if cfg!(debug_assertions) {
+        let help_menu = Submenu::new("Help", true);
+        help_menu
+            .append_items(&[
+                &MenuItem::with_id(
+                    "dioxus-toggle-dev-tools",
+                    "Toggle Developer Tools",
+                    true,
+                    None,
+                ),
+                &MenuItem::with_id(
+                    "dioxus-float-top",
+                    "Float on Top (dev mode only)",
+                    true,
+                    None,
+                ),
+            ])
+            .expect("the native Help menu should be valid");
+        menu.append(&help_menu)
+            .expect("the native Help menu should attach");
+        help_menu.set_as_help_menu_for_nsapp();
+    }
+
+    menu
+}
+
+#[cfg(target_os = "macos")]
+fn install_native_menu() {
+    NATIVE_MENU.with(|_| {});
+}
+
+fn window_config() -> dioxus::desktop::Config {
+    let config = dioxus::desktop::Config::new().with_window(window_builder());
+
+    #[cfg(target_os = "macos")]
+    let config = config.with_menu(None);
+
+    config
+}
+
+#[cfg(target_os = "macos")]
+fn group_window_as_tab(
+    source: &dioxus::desktop::DesktopContext,
+    tab: &dioxus::desktop::DesktopContext,
+) {
+    use dioxus::desktop::tao::platform::macos::WindowExtMacOS;
+    use objc2_app_kit::{NSWindow, NSWindowOrderingMode};
+
+    unsafe {
+        // Both contexts keep their Tao windows alive, and Dioxus polls this task on the main thread.
+        let source = &*source.window.ns_window().cast::<NSWindow>();
+        let tab = &*tab.window.ns_window().cast::<NSWindow>();
+        source.addTabbedWindow_ordered(tab, NSWindowOrderingMode::Above);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn use_native_tabs() {
+    let source = Rc::downgrade(&dioxus::desktop::use_window());
+
+    dioxus::desktop::use_muda_event_handler(move |event| {
+        let Some(source) = source.upgrade() else {
+            return;
+        };
+        if !source.is_focused() {
+            return;
+        }
+
+        match event.id().0.as_str() {
+            NEW_TAB_MENU_ID => {
+                let source = source.clone();
+                spawn(async move {
+                    let tab = source
+                        .new_window(VirtualDom::new(App), window_config())
+                        .await;
+                    group_window_as_tab(&source, &tab);
+                    tab.set_focus();
+                });
+            }
+            CLOSE_TAB_MENU_ID => source.close(),
+            _ => {}
+        }
+    });
+}
+
+fn main() {
+    #[cfg(target_os = "macos")]
+    install_native_menu();
+
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(window_config())
         .launch(App);
 }
 
 #[component]
 fn App() -> Element {
+    #[cfg(target_os = "macos")]
+    use_native_tabs();
+
     let client = use_hook(pi::new_client);
     let mut input = use_signal(String::new);
     let mut transcript = use_signal(Vec::<TranscriptItem>::new);
