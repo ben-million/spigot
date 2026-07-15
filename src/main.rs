@@ -2,37 +2,28 @@ mod pi;
 
 use dioxus::{desktop::LogicalSize, prelude::*};
 
+static INTER_FONT: Asset = asset!("/assets/InterVariable.woff2");
+
 const APP_STYLE: &str = r#"
     :root {
         color-scheme: light dark;
-
-        /* Doric Marble */
-        --doric-cursor: #403030;
-        --doric-bg-main: #ededed;
-        --doric-fg-main: #202020;
-        --doric-border: #9a9a9a;
-        --doric-fg-shadow-subtle: #595959;
-        --doric-bg-shadow-intense: #b0b0b0;
-        --doric-fg-shadow-intense: #404040;
-        --doric-bg-accent: #e5d7c5;
-        --doric-fg-accent: #603d3a;
-        --doric-bg-yellow: #e9e0a0;
-        --sidebar-width: 136px;
+        --background: #ffffff;
+        --surface: #f3f2f2;
+        --surface-hover: #eaeaec;
+        --text: #171717;
+        --muted: #666666;
+        --border: #d3d3d3;
+        --accent: #ff5700;
     }
 
     @media (prefers-color-scheme: dark) {
         :root {
-            /* Doric Obsidian */
-            --doric-cursor: #eeddbb;
-            --doric-bg-main: #181818;
-            --doric-fg-main: #e7e7e7;
-            --doric-border: #727272;
-            --doric-fg-shadow-subtle: #969696;
-            --doric-bg-shadow-intense: #505050;
-            --doric-fg-shadow-intense: #b0b0b0;
-            --doric-bg-accent: #432f2a;
-            --doric-fg-accent: #b59487;
-            --doric-bg-yellow: #504432;
+            --background: #1a1a1a;
+            --surface: #252527;
+            --surface-hover: #2b2b2b;
+            --text: #f3f3f3;
+            --muted: #acadad;
+            --border: #444444;
         }
     }
 
@@ -50,156 +41,41 @@ const APP_STYLE: &str = r#"
     body {
         margin: 0;
         overflow: hidden;
-        background: var(--doric-bg-main);
-        color: var(--doric-fg-main);
-        font-family: "Berkeley Mono", "Roboto Mono", "Fira Code",
-            "SFMono-Regular", Menlo, Consolas, monospace;
-        font-size: 14px;
-        font-variant-ligatures: none;
-        line-height: 19px;
+        background: var(--background);
+        color: var(--text);
+        font-family: "InterVariable", system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.5;
         -webkit-font-smoothing: antialiased;
     }
 
     input {
-        appearance: none;
         font: inherit;
-        -webkit-appearance: none;
     }
 
     ::selection {
-        background: var(--doric-bg-accent);
-        color: var(--doric-fg-main);
+        background: var(--accent);
+        color: #ffffff;
     }
 
     .app {
-        position: fixed;
-        inset: 18px;
         display: grid;
-        grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-        min-width: 0;
-        min-height: 0;
-        background: var(--doric-bg-main);
-    }
-
-    .side-tabs {
-        position: relative;
-        z-index: 2;
-        align-self: start;
-        min-width: 0;
-    }
-
-    .side-cell {
-        position: relative;
-        display: flex;
-        width: calc(100% + 1px);
-        height: 38px;
-        margin: 0 -1px -1px 0;
-        align-items: center;
-        padding: 0 12px;
-        overflow: visible;
-        border: 1px solid var(--doric-border);
-        background: var(--doric-bg-main);
-        color: var(--doric-fg-shadow-subtle);
-        white-space: nowrap;
-    }
-
-    .side-tab {
-        color: var(--doric-fg-main);
-        font-weight: 700;
-    }
-
-    .side-tab::after {
-        position: absolute;
-        z-index: 3;
-        top: 1px;
-        right: -2px;
-        bottom: 1px;
-        width: 4px;
-        background: var(--doric-bg-main);
-        content: "";
-    }
-
-    .workspace {
-        display: grid;
-        grid-template-rows: 20px minmax(0, 1fr) auto;
-        min-width: 0;
-        min-height: 0;
-        padding: 10px 20px 16px;
-        overflow: hidden;
-        border: 1px solid var(--doric-border);
-        background: var(--doric-bg-main);
-    }
-
-    .modeline {
-        display: grid;
-        grid-template-columns: 34px max-content minmax(0, 1fr) max-content;
-        min-width: 0;
-        height: 20px;
-        overflow: hidden;
-        background: var(--doric-bg-shadow-intense);
-        color: var(--doric-fg-shadow-intense);
-        line-height: 20px;
-        white-space: nowrap;
-    }
-
-    .modeline-status {
-        overflow: hidden;
-        background: var(--doric-fg-shadow-intense);
-        color: var(--doric-bg-main);
-        text-align: center;
-    }
-
-    .modeline-status.is-running {
-        background: var(--doric-bg-yellow);
-        color: var(--doric-fg-main);
-    }
-
-    .modeline-status.is-shell {
-        background: var(--doric-bg-accent);
-        color: var(--doric-fg-accent);
-    }
-
-    .modeline-name {
-        padding-left: 1.1ch;
-        overflow: hidden;
-        font-weight: 700;
-        text-overflow: ellipsis;
-    }
-
-    .modeline-mode {
-        min-width: 0;
-        padding-left: 1ch;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .modeline-secondary {
-        padding: 0 1ch;
+        grid-template-rows: minmax(0, 1fr) auto;
+        gap: 16px;
+        width: 100%;
+        max-width: 760px;
+        height: 100%;
+        margin: 0 auto;
+        padding: 24px;
     }
 
     .buffer {
-        position: relative;
         min-width: 0;
         min-height: 0;
-        padding: 6px 0 12px;
+        padding: 8px 2px;
         overflow: auto;
-        background: var(--doric-bg-main);
-        scrollbar-color: var(--doric-border) transparent;
-        scrollbar-gutter: stable;
+        scrollbar-color: var(--border) transparent;
         scrollbar-width: thin;
-    }
-
-    .buffer::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-    }
-
-    .buffer::-webkit-scrollbar-thumb {
-        background: var(--doric-border);
-    }
-
-    .buffer::-webkit-scrollbar-track {
-        background: transparent;
     }
 
     .output {
@@ -207,138 +83,45 @@ const APP_STYLE: &str = r#"
         margin: 0;
         overflow-wrap: anywhere;
         white-space: pre-wrap;
-        color: var(--doric-fg-main);
+        color: var(--text);
         font: inherit;
     }
 
-    .working-line {
-        display: inline-flex;
-        align-items: center;
-        gap: 1ch;
-        color: var(--doric-fg-main);
-    }
-
-    .cursor {
-        width: 0.72ch;
-        height: 1.05em;
-        background: var(--doric-cursor);
-        animation: cursor-blink 1s steps(1, end) infinite;
-    }
-
-    @keyframes cursor-blink {
-        50% {
-            opacity: 0;
-        }
-    }
-
-    .splash {
-        position: absolute;
-        inset: 0;
-        display: grid;
-        place-content: center;
-        color: var(--doric-fg-shadow-subtle);
-        text-align: left;
-    }
-
-    .splash-title {
-        color: var(--doric-fg-main);
-        font-weight: 700;
-    }
-
     .prompt {
-        display: grid;
         min-width: 0;
-        min-height: 40px;
-        border: 1px solid var(--doric-border);
-        background: var(--doric-bg-main);
+        overflow: hidden;
+        border-radius: 12px;
+        background: var(--surface);
     }
 
-    .prompt.is-shell {
-        border-color: var(--doric-fg-accent);
+    .prompt:hover {
+        background: var(--surface-hover);
     }
 
     .prompt input {
+        width: 100%;
         min-width: 0;
-        padding: 9px 10px;
+        padding: 13px 15px;
         border: 0;
-        border-radius: 0;
         outline: 0;
         background: transparent;
-        color: var(--doric-fg-main);
-        caret-color: var(--doric-cursor);
+        color: var(--text);
+        caret-color: var(--accent);
     }
 
     .prompt input::placeholder {
-        color: var(--doric-fg-shadow-subtle);
+        color: var(--muted);
         opacity: 1;
     }
 
-    .prompt input:focus-visible {
-        box-shadow: inset 0 -2px var(--doric-fg-accent);
+    .prompt input:focus::placeholder {
+        opacity: 0;
     }
 
-    @media (max-width: 639px) {
-        :root {
-            --sidebar-width: 112px;
-        }
-
+    @media (max-width: 600px) {
         .app {
-            inset: 10px;
-        }
-
-        .workspace {
-            padding: 10px 12px 12px;
-        }
-
-        .modeline-mode {
-            visibility: hidden;
-        }
-    }
-
-    @media (max-width: 479px) {
-        .app {
-            inset: 0;
-            grid-template-columns: minmax(0, 1fr);
-            grid-template-rows: 38px minmax(0, 1fr);
-        }
-
-        .side-tabs {
-            display: flex;
-            min-width: 0;
-        }
-
-        .side-cell {
-            width: auto;
-            min-width: 112px;
-            flex: 0 0 auto;
-            margin: 0 -1px 0 0;
-        }
-
-        .side-tab::after {
-            top: auto;
-            right: 1px;
-            bottom: -2px;
-            left: 1px;
-            width: auto;
-            height: 4px;
-        }
-
-        .workspace {
-            padding: 10px;
-        }
-
-        .modeline {
-            grid-template-columns: 34px minmax(0, 1fr) max-content;
-        }
-
-        .modeline-mode {
-            display: none;
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .cursor {
-            animation: none;
+            gap: 12px;
+            padding: 16px;
         }
     }
 "#;
@@ -397,141 +180,86 @@ fn App() -> Element {
     let mut input = use_signal(String::new);
     let mut output = use_signal(String::new);
     let mut running = use_signal(|| false);
-    let mut running_bash = use_signal(|| false);
     let mut input_element = use_signal(|| None::<std::rc::Rc<MountedData>>);
 
     let input_text = input();
     let is_running = running();
-    let is_running_bash = running_bash();
-    let is_bash_input = matches!(
-        pi::UserRequest::from_input(input_text.clone()),
-        pi::UserRequest::Bash { .. }
-    );
-    let status_label = if is_running_bash {
-        "RUNNING"
-    } else if is_running {
-        "WORKING"
-    } else {
-        "READY"
-    };
-    let status_badge = if is_running_bash { "$" } else { "PI" };
-    let mode_label = if is_running_bash {
-        "(shell command)"
-    } else {
-        "(agent session)"
-    };
     let output_text = output();
-    let show_splash = !is_running && output_text.is_empty();
-    let status_class = if is_running_bash {
-        "modeline-status is-shell"
-    } else if is_running {
-        "modeline-status is-running"
-    } else {
-        "modeline-status"
-    };
-    let prompt_class = if is_bash_input {
-        "prompt is-shell"
-    } else {
-        "prompt"
-    };
 
     rsx! {
+        style { "@font-face {{ font-family: 'InterVariable'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('{INTER_FONT}') format('woff2'); }}" }
         style { {APP_STYLE} }
-        main { class: "app",
-            aside { class: "side-tabs", aria_label: "Buffers",
-                div { class: "side-cell side-tab", "spigot.chat" }
+        main { class: "app", aria_label: "Spigot",
+            section { class: "buffer", aria_live: "polite", aria_busy: is_running,
+                pre { class: "output", "{output_text}" }
             }
-            section { class: "workspace", aria_label: "Spigot chat buffer",
-                header { class: "modeline",
-                    span { class: "{status_class}", "{status_badge}" }
-                    span { class: "modeline-name", "Spigot" }
-                    span { class: "modeline-mode", "{mode_label}" }
-                    span { class: "modeline-secondary", "{status_label}" }
-                }
-                section { class: "buffer", aria_live: "polite", aria_busy: is_running,
-                    if show_splash {
-                        div { class: "splash",
-                            span { class: "splash-title", "tasty" }
-                        }
-                    } else if is_running && output_text.is_empty() {
-                        div { class: "working-line",
-                            span { "Pi is working" }
-                            span { class: "cursor", aria_hidden: "true" }
-                        }
-                    } else {
-                        pre { class: "output", "{output_text}" }
+            form {
+                class: "prompt",
+                onsubmit: move |event| {
+                    event.prevent_default();
+
+                    if running() {
+                        return;
                     }
-                }
-                form {
-                    class: "{prompt_class}",
-                    onsubmit: move |event| {
-                        event.prevent_default();
 
-                        if running() {
-                            return;
-                        }
-
-                        let message = input().trim().to_owned();
-                        if message.is_empty() {
-                            return;
-                        }
-
-                        let request = pi::UserRequest::from_input(message);
-                        let bash_command = match &request {
-                            pi::UserRequest::Bash { command, .. } => Some(command.clone()),
-                            pi::UserRequest::Prompt(_) => None,
-                        };
-                        let client = client.clone();
-                        input.set(String::new());
-                        output.set(
-                            bash_command
-                                .as_ref()
-                                .map(|command| format!("$ {command}\n\n"))
-                                .unwrap_or_default(),
-                        );
-                        running_bash.set(bash_command.is_some());
-                        running.set(true);
-
-                        spawn(async move {
-                            let mut streamed_output = output;
-                            let result = pi::run(&client, request, move |delta| {
-                                streamed_output.write().push_str(delta);
-                            })
-                            .await;
-
-                            match result {
-                                Err(error) => output.set(format!("Error: {error}")),
-                                Ok(pi::RequestOutcome::Prompt) if output.read().is_empty() => {
-                                    output.set("(Pi returned no text output.)".to_owned());
-                                }
-                                Ok(pi::RequestOutcome::Bash(outcome)) => {
-                                    if let Some(command) = bash_command {
-                                        output.set(render_bash_output(&command, outcome));
-                                    } else {
-                                        output.set(
-                                            "Error: the shell command was not available.".to_owned(),
-                                        );
-                                    }
-                                }
-                                Ok(pi::RequestOutcome::Prompt) => {}
-                            }
-
-                            running.set(false);
-                            running_bash.set(false);
-                            if let Some(input_element) = input_element.cloned() {
-                                let _ = input_element.set_focus(true).await;
-                            }
-                        });
-                    },
-                    input {
-                        aria_label: "Prompt or shell command",
-                        autocomplete: "off",
-                        autofocus: true,
-                        placeholder: "Ask Pi or run !command…",
-                        value: "{input_text}",
-                        oninput: move |event| input.set(event.value()),
-                        onmounted: move |element| input_element.set(Some(element.data())),
+                    let message = input().trim().to_owned();
+                    if message.is_empty() {
+                        return;
                     }
+
+                    let request = pi::UserRequest::from_input(message);
+                    let bash_command = match &request {
+                        pi::UserRequest::Bash { command, .. } => Some(command.clone()),
+                        pi::UserRequest::Prompt(_) => None,
+                    };
+                    let client = client.clone();
+                    input.set(String::new());
+                    output.set(
+                        bash_command
+                            .as_ref()
+                            .map(|command| format!("$ {command}\n\n"))
+                            .unwrap_or_default(),
+                    );
+                    running.set(true);
+
+                    spawn(async move {
+                        let mut streamed_output = output;
+                        let result = pi::run(&client, request, move |delta| {
+                            streamed_output.write().push_str(delta);
+                        })
+                        .await;
+
+                        match result {
+                            Err(error) => output.set(format!("Error: {error}")),
+                            Ok(pi::RequestOutcome::Prompt) if output.read().is_empty() => {
+                                output.set("(Pi returned no text output.)".to_owned());
+                            }
+                            Ok(pi::RequestOutcome::Bash(outcome)) => {
+                                if let Some(command) = bash_command {
+                                    output.set(render_bash_output(&command, outcome));
+                                } else {
+                                    output.set(
+                                        "Error: the shell command was not available.".to_owned(),
+                                    );
+                                }
+                            }
+                            Ok(pi::RequestOutcome::Prompt) => {}
+                        }
+
+                        running.set(false);
+                        if let Some(input_element) = input_element.cloned() {
+                            let _ = input_element.set_focus(true).await;
+                        }
+                    });
+                },
+                input {
+                    aria_label: "Prompt or shell command",
+                    autocomplete: "off",
+                    autofocus: true,
+                    placeholder: "Ask Pi or run !command…",
+                    value: "{input_text}",
+                    oninput: move |event| input.set(event.value()),
+                    onmounted: move |element| input_element.set(Some(element.data())),
                 }
             }
         }

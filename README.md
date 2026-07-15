@@ -39,6 +39,6 @@ cargo clippy --all-targets -- -D warnings
 
 ## Acknowledgments
 
-Spigot uses the [Doric Marble and Doric Obsidian](https://github.com/protesilaos/doric-themes) color palettes for its light and dark appearances.
+Spigot uses the neutral palette from [Signal by UNMS](https://signal.un.ms/) with `#FF5700` as its accent. The bundled Inter font is licensed under the [SIL Open Font License](assets/InterVariable-LICENSE.txt).
 
 Spigot's development philosophy is adapted from the [suckless.org philosophy](https://suckless.org/philosophy/).
