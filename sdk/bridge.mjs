@@ -54,7 +54,7 @@ function createBashStreamer(id) {
     }
     const delta = buffered;
     buffered = "";
-    emit({ type: "text_delta", id, delta });
+    emit({ type: "bash_delta", id, delta });
   };
 
   return {
@@ -84,10 +84,43 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function conciseError(result) {
+  const lines = result?.content
+    ?.filter((part) => part.type === "text" && typeof part.text === "string")
+    .flatMap((part) => part.text.split(/\r?\n/))
+    .filter((line) => line.trim().length > 0);
+  return lines?.at(-1)?.trim().slice(0, 500) || "Tool failed";
+}
+
+function toolSummaryArgs(toolName, args) {
+  switch (toolName) {
+    case "read":
+      return {
+        path: args?.path ?? args?.file_path,
+        offset: args?.offset,
+        limit: args?.limit,
+      };
+    case "bash":
+      return { command: args?.command };
+    case "edit":
+    case "write":
+      return { path: args?.path ?? args?.file_path };
+    case "grep":
+    case "find":
+      return { pattern: args?.pattern, path: args?.path };
+    case "ls":
+      return { path: args?.path };
+    default:
+      return {};
+  }
+}
+
 async function main() {
   const {
     AuthStorage,
     createAgentSession,
+    DefaultResourceLoader,
+    getAgentDir,
     ModelRegistry,
     SessionManager,
   } = await import("@earendil-works/pi-coding-agent");
@@ -95,10 +128,21 @@ async function main() {
   const cwd = process.env.SPIGOT_AGENT_CWD || process.cwd();
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    appendSystemPromptOverride: (base) => [
+      ...base,
+      "Spigot displays assistant responses as plain text. Do not use Markdown formatting. Use ordinary sentences and line breaks instead of headings, list markers, emphasis, links, tables, inline code, or fenced code blocks.",
+    ],
+  });
+  await resourceLoader.reload();
+
   const { session, modelFallbackMessage } = await createAgentSession({
     cwd,
     authStorage,
     modelRegistry,
+    resourceLoader,
     sessionManager: SessionManager.inMemory(cwd),
   });
 
@@ -132,16 +176,40 @@ async function main() {
   }
 
   const unsubscribe = session.subscribe((event) => {
-    if (activeRequestId === null || event.type !== "message_update") {
+    if (activeRequestId === null) {
       return;
     }
 
-    const update = event.assistantMessageEvent;
-    if (update.type === "text_delta") {
-      emit({ type: "text_delta", id: activeRequestId, delta: update.delta });
-    } else if (update.type === "error") {
-      activeError =
-        update.error?.errorMessage || `Pi stopped with reason: ${update.reason}`;
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      emit({ type: "assistant_start", id: activeRequestId });
+    } else if (event.type === "message_update") {
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta") {
+        emit({ type: "text_delta", id: activeRequestId, delta: update.delta });
+      }
+    } else if (event.type === "message_end" && event.message.role === "assistant") {
+      if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
+        activeError =
+          event.message.errorMessage || `Pi stopped with reason: ${event.message.stopReason}`;
+      } else {
+        activeError = null;
+      }
+    } else if (event.type === "tool_execution_start") {
+      emit({
+        type: "tool_start",
+        id: activeRequestId,
+        tool_call_id: event.toolCallId,
+        tool_name: event.toolName,
+        args: toolSummaryArgs(event.toolName, event.args),
+      });
+    } else if (event.type === "tool_execution_end") {
+      emit({
+        type: "tool_end",
+        id: activeRequestId,
+        tool_call_id: event.toolCallId,
+        is_error: event.isError,
+        error: event.isError ? conciseError(event.result) : null,
+      });
     }
   });
 

@@ -53,6 +53,23 @@ impl UserRequest {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum StreamEvent {
+    AssistantStart,
+    TextDelta(String),
+    ToolStart {
+        id: String,
+        name: String,
+        args: serde_json::Value,
+    },
+    ToolEnd {
+        id: String,
+        is_error: bool,
+        error: Option<String>,
+    },
+    BashDelta(String),
+}
+
 #[derive(Debug)]
 pub enum RequestOutcome {
     Prompt,
@@ -75,7 +92,7 @@ pub fn new_client() -> SharedPiClient {
 pub async fn run(
     client: &SharedPiClient,
     request: UserRequest,
-    mut on_delta: impl FnMut(&str),
+    mut on_event: impl FnMut(StreamEvent),
 ) -> Result<RequestOutcome, String> {
     let mut client = client.lock().await;
 
@@ -93,7 +110,7 @@ pub async fn run(
         client
             .as_mut()
             .expect("Pi process was initialized")
-            .run(&request, &mut on_delta),
+            .run(&request, &mut on_event),
     )
     .await
     {
@@ -207,7 +224,7 @@ impl PiProcess {
     async fn run(
         &mut self,
         request: &UserRequest,
-        on_delta: &mut impl FnMut(&str),
+        on_event: &mut impl FnMut(StreamEvent),
     ) -> Result<RequestOutcome, String> {
         self.next_request_id += 1;
         let id = self.next_request_id;
@@ -229,10 +246,37 @@ impl PiProcess {
 
         loop {
             match self.next_event().await? {
+                BridgeEvent::AssistantStart { id: event_id } if event_id == id => {
+                    on_event(StreamEvent::AssistantStart);
+                }
                 BridgeEvent::TextDelta {
                     id: event_id,
                     delta,
-                } if event_id == id => on_delta(&delta),
+                } if event_id == id => on_event(StreamEvent::TextDelta(delta)),
+                BridgeEvent::ToolStart {
+                    id: event_id,
+                    tool_call_id,
+                    tool_name,
+                    args,
+                } if event_id == id => on_event(StreamEvent::ToolStart {
+                    id: tool_call_id,
+                    name: tool_name,
+                    args,
+                }),
+                BridgeEvent::ToolEnd {
+                    id: event_id,
+                    tool_call_id,
+                    is_error,
+                    error,
+                } if event_id == id => on_event(StreamEvent::ToolEnd {
+                    id: tool_call_id,
+                    is_error,
+                    error,
+                }),
+                BridgeEvent::BashDelta {
+                    id: event_id,
+                    delta,
+                } if event_id == id => on_event(StreamEvent::BashDelta(delta)),
                 BridgeEvent::Done { id: event_id } if event_id == id => {
                     return match request {
                         BridgeRequest::Prompt { .. } => Ok(RequestOutcome::Prompt),
@@ -344,7 +388,26 @@ enum BridgeRequest<'a> {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum BridgeEvent {
     Ready,
+    AssistantStart {
+        id: u64,
+    },
     TextDelta {
+        id: u64,
+        delta: String,
+    },
+    ToolStart {
+        id: u64,
+        tool_call_id: String,
+        tool_name: String,
+        args: serde_json::Value,
+    },
+    ToolEnd {
+        id: u64,
+        tool_call_id: String,
+        is_error: bool,
+        error: Option<String>,
+    },
+    BashDelta {
         id: u64,
         delta: String,
     },
@@ -462,5 +525,67 @@ mod tests {
             }
             event => panic!("expected bash completion, got {event:?}"),
         }
+    }
+
+    #[test]
+    fn deserializes_stream_boundaries_and_bash_deltas() {
+        let start: BridgeEvent = serde_json::from_value(json!({
+            "type": "assistant_start",
+            "id": 3
+        }))
+        .expect("assistant start should deserialize");
+        let delta: BridgeEvent = serde_json::from_value(json!({
+            "type": "bash_delta",
+            "id": 3,
+            "delta": "running\n"
+        }))
+        .expect("bash delta should deserialize");
+
+        assert!(matches!(start, BridgeEvent::AssistantStart { id: 3 }));
+        assert!(matches!(
+            delta,
+            BridgeEvent::BashDelta { id: 3, delta } if delta == "running\n"
+        ));
+    }
+
+    #[test]
+    fn deserializes_tool_lifecycle_events() {
+        let start: BridgeEvent = serde_json::from_value(json!({
+            "type": "tool_start",
+            "id": 4,
+            "tool_call_id": "call-1",
+            "tool_name": "read",
+            "args": { "path": "src/main.rs" }
+        }))
+        .expect("tool start should deserialize");
+        let end: BridgeEvent = serde_json::from_value(json!({
+            "type": "tool_end",
+            "id": 4,
+            "tool_call_id": "call-1",
+            "is_error": true,
+            "error": "file missing"
+        }))
+        .expect("tool end should deserialize");
+
+        assert!(matches!(
+            start,
+            BridgeEvent::ToolStart {
+                id: 4,
+                tool_call_id,
+                tool_name,
+                args,
+            } if tool_call_id == "call-1"
+                && tool_name == "read"
+                && args["path"] == "src/main.rs"
+        ));
+        assert!(matches!(
+            end,
+            BridgeEvent::ToolEnd {
+                id: 4,
+                tool_call_id,
+                is_error: true,
+                error: Some(error),
+            } if tool_call_id == "call-1" && error == "file missing"
+        ));
     }
 }
