@@ -34,3 +34,7 @@ cargo fmt --check
 cargo check
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Acknowledgments
+
+Crust's development philosophy is adapted from the [suckless.org philosophy](https://suckless.org/philosophy/).

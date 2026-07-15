@@ -8,19 +8,75 @@ use tokio::{
 };
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const ABORT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_PROMPT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 pub type SharedPiClient = Arc<Mutex<Option<PiProcess>>>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum UserRequest {
+    Prompt(String),
+    Bash {
+        command: String,
+        exclude_from_context: bool,
+    },
+}
+
+impl UserRequest {
+    pub fn from_input(input: String) -> Self {
+        let input = input.trim();
+
+        let bash = if let Some(command) = input.strip_prefix("!!") {
+            Some((command, true))
+        } else {
+            input.strip_prefix('!').map(|command| (command, false))
+        };
+
+        if let Some((command, exclude_from_context)) = bash {
+            let command = command.trim();
+            if !command.is_empty() {
+                return Self::Bash {
+                    command: command.to_owned(),
+                    exclude_from_context,
+                };
+            }
+        }
+
+        Self::Prompt(input.to_owned())
+    }
+
+    fn timeout_subject(&self) -> &'static str {
+        match self {
+            Self::Prompt(_) => "Pi",
+            Self::Bash { .. } => "The shell command",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RequestOutcome {
+    Prompt,
+    Bash(BashOutcome),
+}
+
+#[derive(Debug)]
+pub struct BashOutcome {
+    pub output: String,
+    pub exit_code: Option<i32>,
+    pub cancelled: bool,
+    pub truncated: bool,
+    pub full_output_path: Option<String>,
+}
 
 pub fn new_client() -> SharedPiClient {
     Arc::new(Mutex::new(None))
 }
 
-pub async fn prompt(
+pub async fn run(
     client: &SharedPiClient,
-    message: String,
+    request: UserRequest,
     mut on_delta: impl FnMut(&str),
-) -> Result<(), String> {
+) -> Result<RequestOutcome, String> {
     let mut client = client.lock().await;
 
     if client.is_none() {
@@ -31,25 +87,43 @@ pub async fn prompt(
     }
 
     let prompt_timeout = configured_prompt_timeout();
-    let result = match timeout(
+    let timeout_subject = request.timeout_subject();
+    let (result, stop_process) = match timeout(
         prompt_timeout,
         client
             .as_mut()
             .expect("Pi process was initialized")
-            .prompt(&message, &mut on_delta),
+            .run(&request, &mut on_delta),
     )
     .await
     {
-        Ok(result) => result,
-        Err(_) => Err(format!(
-            "Pi did not finish within {} seconds",
-            prompt_timeout.as_secs()
-        )),
+        Ok(result) => {
+            let stop_process = result.is_err();
+            (result, stop_process)
+        }
+        Err(_) => {
+            let abort_succeeded = matches!(
+                timeout(
+                    ABORT_TIMEOUT,
+                    client
+                        .as_mut()
+                        .expect("Pi process was initialized")
+                        .abort_current(),
+                )
+                .await,
+                Ok(Ok(()))
+            );
+            (
+                Err(format!(
+                    "{timeout_subject} did not finish within {} seconds",
+                    prompt_timeout.as_secs()
+                )),
+                !abort_succeeded,
+            )
+        }
     };
 
-    if result.is_err()
-        && let Some(process) = client.take()
-    {
+    if stop_process && let Some(process) = client.take() {
         process.stop().await;
     }
 
@@ -131,30 +205,28 @@ impl PiProcess {
         }
     }
 
-    async fn prompt(
+    async fn run(
         &mut self,
-        message: &str,
+        request: &UserRequest,
         on_delta: &mut impl FnMut(&str),
-    ) -> Result<(), String> {
+    ) -> Result<RequestOutcome, String> {
         self.next_request_id += 1;
         let id = self.next_request_id;
-        let request = PromptRequest {
-            kind: "prompt",
-            id,
-            message,
+        let request = match request {
+            UserRequest::Prompt(message) => BridgeRequest::Prompt {
+                id,
+                message: message.as_str(),
+            },
+            UserRequest::Bash {
+                command,
+                exclude_from_context,
+            } => BridgeRequest::Bash {
+                id,
+                command: command.as_str(),
+                exclude_from_context: *exclude_from_context,
+            },
         };
-        let mut line = serde_json::to_vec(&request)
-            .map_err(|error| format!("could not encode prompt: {error}"))?;
-        line.push(b'\n');
-
-        self.stdin
-            .write_all(&line)
-            .await
-            .map_err(|error| format!("could not write to the Pi SDK bridge: {error}"))?;
-        self.stdin
-            .flush()
-            .await
-            .map_err(|error| format!("could not flush the Pi SDK bridge input: {error}"))?;
+        self.send_request(&request).await?;
 
         loop {
             match self.next_event().await? {
@@ -162,7 +234,31 @@ impl PiProcess {
                     id: event_id,
                     delta,
                 } if event_id == id => on_delta(&delta),
-                BridgeEvent::Done { id: event_id } if event_id == id => return Ok(()),
+                BridgeEvent::Done { id: event_id } if event_id == id => {
+                    return match request {
+                        BridgeRequest::Prompt { .. } => Ok(RequestOutcome::Prompt),
+                        _ => Err("the Pi SDK bridge returned the wrong completion type".to_owned()),
+                    };
+                }
+                BridgeEvent::BashDone {
+                    id: event_id,
+                    output,
+                    exit_code,
+                    cancelled,
+                    truncated,
+                    full_output_path,
+                } if event_id == id => {
+                    return match request {
+                        BridgeRequest::Bash { .. } => Ok(RequestOutcome::Bash(BashOutcome {
+                            output,
+                            exit_code,
+                            cancelled,
+                            truncated,
+                            full_output_path,
+                        })),
+                        _ => Err("the Pi SDK bridge returned the wrong completion type".to_owned()),
+                    };
+                }
                 BridgeEvent::Error {
                     id: Some(event_id),
                     message,
@@ -173,6 +269,40 @@ impl PiProcess {
                 _ => {}
             }
         }
+    }
+
+    async fn abort_current(&mut self) -> Result<(), String> {
+        let id = self.next_request_id;
+        self.send_request(&BridgeRequest::Abort { id }).await?;
+
+        loop {
+            match self.next_event().await? {
+                BridgeEvent::Done { id: event_id }
+                | BridgeEvent::BashDone { id: event_id, .. }
+                | BridgeEvent::Error {
+                    id: Some(event_id), ..
+                } if event_id == id => return Ok(()),
+                BridgeEvent::Error { id: None, message } | BridgeEvent::Fatal { message } => {
+                    return Err(message);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    async fn send_request(&mut self, request: &BridgeRequest<'_>) -> Result<(), String> {
+        let mut line = serde_json::to_vec(request)
+            .map_err(|error| format!("could not encode request: {error}"))?;
+        line.push(b'\n');
+
+        self.stdin
+            .write_all(&line)
+            .await
+            .map_err(|error| format!("could not write to the Pi SDK bridge: {error}"))?;
+        self.stdin
+            .flush()
+            .await
+            .map_err(|error| format!("could not flush the Pi SDK bridge input: {error}"))
     }
 
     async fn next_event(&mut self) -> Result<BridgeEvent, String> {
@@ -195,11 +325,20 @@ impl PiProcess {
 }
 
 #[derive(Serialize)]
-struct PromptRequest<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    id: u64,
-    message: &'a str,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BridgeRequest<'a> {
+    Prompt {
+        id: u64,
+        message: &'a str,
+    },
+    Bash {
+        id: u64,
+        command: &'a str,
+        exclude_from_context: bool,
+    },
+    Abort {
+        id: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,6 +352,14 @@ enum BridgeEvent {
     Done {
         id: u64,
     },
+    BashDone {
+        id: u64,
+        output: String,
+        exit_code: Option<i32>,
+        cancelled: bool,
+        truncated: bool,
+        full_output_path: Option<String>,
+    },
     Error {
         id: Option<u64>,
         message: String,
@@ -222,4 +369,99 @@ enum BridgeEvent {
     },
     #[serde(other)]
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BridgeEvent, BridgeRequest, UserRequest};
+    use serde_json::json;
+
+    #[test]
+    fn classifies_visible_bash_commands() {
+        assert_eq!(
+            UserRequest::from_input("  !  printf hello  ".to_owned()),
+            UserRequest::Bash {
+                command: "printf hello".to_owned(),
+                exclude_from_context: false,
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_hidden_bash_commands() {
+        assert_eq!(
+            UserRequest::from_input("!!pwd".to_owned()),
+            UserRequest::Bash {
+                command: "pwd".to_owned(),
+                exclude_from_context: true,
+            }
+        );
+    }
+
+    #[test]
+    fn treats_empty_bash_prefixes_as_prompts() {
+        assert_eq!(
+            UserRequest::from_input("!".to_owned()),
+            UserRequest::Prompt("!".to_owned())
+        );
+        assert_eq!(
+            UserRequest::from_input("!!  ".to_owned()),
+            UserRequest::Prompt("!!".to_owned())
+        );
+    }
+
+    #[test]
+    fn serializes_bash_context_visibility() {
+        let visible = serde_json::to_value(BridgeRequest::Bash {
+            id: 7,
+            command: "pwd",
+            exclude_from_context: false,
+        })
+        .expect("bash request should serialize");
+        let hidden = serde_json::to_value(BridgeRequest::Bash {
+            id: 8,
+            command: "env",
+            exclude_from_context: true,
+        })
+        .expect("hidden bash request should serialize");
+
+        assert_eq!(
+            visible,
+            json!({
+                "type": "bash",
+                "id": 7,
+                "command": "pwd",
+                "exclude_from_context": false
+            })
+        );
+        assert_eq!(hidden["exclude_from_context"], true);
+    }
+
+    #[test]
+    fn deserializes_optional_bash_completion_fields() {
+        let event: BridgeEvent = serde_json::from_value(json!({
+            "type": "bash_done",
+            "id": 9,
+            "output": "done",
+            "cancelled": false,
+            "truncated": false
+        }))
+        .expect("bash completion should deserialize");
+
+        match event {
+            BridgeEvent::BashDone {
+                id,
+                output,
+                exit_code,
+                full_output_path,
+                ..
+            } => {
+                assert_eq!(id, 9);
+                assert_eq!(output, "done");
+                assert_eq!(exit_code, None);
+                assert_eq!(full_output_path, None);
+            }
+            event => panic!("expected bash completion, got {event:?}"),
+        }
+    }
 }

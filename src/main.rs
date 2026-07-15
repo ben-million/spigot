@@ -14,6 +14,7 @@ const APP_STYLE: &str = r#"
         --nano-critical: #ff6f00;
         --nano-critical-text: #173541;
         --nano-salient: #673ab7;
+        --nano-salient-text: #ffffff;
         --nano-strong: #0e2a35;
         --nano-subtle: #eceff1;
         --nano-faded: #b0bec5;
@@ -33,6 +34,7 @@ const APP_STYLE: &str = r#"
             --nano-critical: #ebcb8b;
             --nano-critical-text: #2e3440;
             --nano-salient: #81a1c1;
+            --nano-salient-text: #2e3440;
             --nano-strong: #eceff4;
             --nano-subtle: #434c5e;
             --nano-faded: #677691;
@@ -163,6 +165,11 @@ const APP_STYLE: &str = r#"
         color: var(--nano-critical-text);
     }
 
+    .modeline-status.is-shell {
+        background: var(--nano-salient);
+        color: var(--nano-salient-text);
+    }
+
     .modeline-name {
         padding-left: 1.1ch;
         overflow: hidden;
@@ -247,10 +254,6 @@ const APP_STYLE: &str = r#"
         text-align: left;
     }
 
-    .splash-line {
-        white-space: nowrap;
-    }
-
     .splash-title {
         color: var(--nano-strong);
         font-weight: 700;
@@ -258,20 +261,21 @@ const APP_STYLE: &str = r#"
 
     .prompt {
         display: grid;
-        grid-template-columns: 32px minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto;
         min-width: 0;
         min-height: 40px;
         border: 1px solid var(--nano-ink);
         background: var(--nano-background);
     }
 
-    .prompt-mark {
-        display: grid;
-        place-items: center;
-        background: var(--nano-subtle);
-        color: var(--nano-foreground);
-        font-weight: 700;
-        user-select: none;
+    .prompt.is-shell {
+        border-color: var(--nano-salient);
+    }
+
+    .prompt.is-shell button:not(:disabled) {
+        border-left-color: var(--nano-salient);
+        background: var(--nano-salient);
+        color: var(--nano-salient-text);
     }
 
     .prompt input {
@@ -386,6 +390,41 @@ const APP_STYLE: &str = r#"
     }
 "#;
 
+fn render_bash_output(command: &str, outcome: pi::BashOutcome) -> String {
+    let mut rendered = format!("$ {command}\n\n");
+    if outcome.output.is_empty() {
+        rendered.push_str("(no output)");
+    } else {
+        rendered.push_str(&outcome.output);
+    }
+
+    let mut notices = Vec::new();
+    if outcome.cancelled {
+        notices.push("[cancelled]".to_owned());
+    } else if let Some(exit_code) = outcome.exit_code
+        && exit_code != 0
+    {
+        notices.push(format!("[exit {exit_code}]"));
+    }
+
+    if outcome.truncated {
+        notices.push(match outcome.full_output_path {
+            Some(path) => format!("[output truncated; full output: {path}]"),
+            None => "[output truncated]".to_owned(),
+        });
+    }
+
+    for notice in notices {
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered.push_str(&notice);
+        rendered.push('\n');
+    }
+
+    rendered
+}
+
 fn main() {
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
@@ -405,17 +444,49 @@ fn App() -> Element {
     let mut input = use_signal(String::new);
     let mut output = use_signal(String::new);
     let mut running = use_signal(|| false);
+    let mut running_bash = use_signal(|| false);
     let mut input_element = use_signal(|| None::<std::rc::Rc<MountedData>>);
 
-    let submit_disabled = running() || input.read().trim().is_empty();
-    let submit_label = if running() { "Working…" } else { "Send" };
-    let status_label = if running() { "WORKING" } else { "READY" };
+    let input_text = input();
+    let is_running = running();
+    let is_running_bash = running_bash();
+    let is_bash_input = input_text.trim_start().starts_with('!');
+    let submit_disabled = is_running || input_text.trim().is_empty();
+    let submit_label = if is_running_bash {
+        "Running…"
+    } else if is_running {
+        "Working…"
+    } else if is_bash_input {
+        "Run"
+    } else {
+        "Send"
+    };
+    let status_label = if is_running_bash {
+        "RUNNING"
+    } else if is_running {
+        "WORKING"
+    } else {
+        "READY"
+    };
+    let status_badge = if is_running_bash { "$" } else { "PI" };
+    let mode_label = if is_running_bash {
+        "(shell command)"
+    } else {
+        "(agent session)"
+    };
     let output_text = output();
-    let show_splash = !running() && output_text.is_empty();
-    let status_class = if running() {
+    let show_splash = !is_running && output_text.is_empty();
+    let status_class = if is_running_bash {
+        "modeline-status is-shell"
+    } else if is_running {
         "modeline-status is-running"
     } else {
         "modeline-status"
+    };
+    let prompt_class = if is_bash_input {
+        "prompt is-shell"
+    } else {
+        "prompt"
     };
 
     rsx! {
@@ -427,21 +498,17 @@ fn App() -> Element {
             }
             section { class: "workspace", aria_label: "Crust chat buffer",
                 header { class: "modeline",
-                    span { class: "{status_class}", "PI" }
+                    span { class: "{status_class}", "{status_badge}" }
                     span { class: "modeline-name", "Crust" }
-                    span { class: "modeline-mode", "(agent session)" }
+                    span { class: "modeline-mode", "{mode_label}" }
                     span { class: "modeline-secondary", "{status_label}" }
                 }
-                section { class: "buffer", aria_live: "polite", aria_busy: running(),
+                section { class: "buffer", aria_live: "polite", aria_busy: is_running,
                     if show_splash {
                         div { class: "splash",
-                            div { class: "splash-line",
-                                span { class: "splash-title", "CRUST / P I" }
-                                span { " — Pi made simple" }
-                            }
-                            div { class: "splash-line", "Type a request below to begin." }
+                            span { class: "splash-title", "tasty" }
                         }
-                    } else if running() && output_text.is_empty() {
+                    } else if is_running && output_text.is_empty() {
                         div { class: "working-line",
                             span { "Pi is working" }
                             span { class: "cursor", aria_hidden: "true" }
@@ -451,7 +518,7 @@ fn App() -> Element {
                     }
                 }
                 form {
-                    class: "prompt",
+                    class: "{prompt_class}",
                     onsubmit: move |event| {
                         event.prevent_default();
 
@@ -464,37 +531,59 @@ fn App() -> Element {
                             return;
                         }
 
+                        let request = pi::UserRequest::from_input(message);
+                        let bash_command = match &request {
+                            pi::UserRequest::Bash { command, .. } => Some(command.clone()),
+                            pi::UserRequest::Prompt(_) => None,
+                        };
                         let client = client.clone();
                         input.set(String::new());
-                        output.set(String::new());
+                        output.set(
+                            bash_command
+                                .as_ref()
+                                .map(|command| format!("$ {command}\n\n"))
+                                .unwrap_or_default(),
+                        );
+                        running_bash.set(bash_command.is_some());
                         running.set(true);
 
                         spawn(async move {
                             let mut streamed_output = output;
-                            let result = pi::prompt(&client, message, move |delta| {
+                            let result = pi::run(&client, request, move |delta| {
                                 streamed_output.write().push_str(delta);
                             })
                             .await;
 
-                            if let Err(error) = result {
-                                output.set(format!("Error: {error}"));
-                            } else if output.read().is_empty() {
-                                output.set("(Pi returned no text output.)".to_owned());
+                            match result {
+                                Err(error) => output.set(format!("Error: {error}")),
+                                Ok(pi::RequestOutcome::Prompt) if output.read().is_empty() => {
+                                    output.set("(Pi returned no text output.)".to_owned());
+                                }
+                                Ok(pi::RequestOutcome::Bash(outcome)) => {
+                                    if let Some(command) = bash_command {
+                                        output.set(render_bash_output(&command, outcome));
+                                    } else {
+                                        output.set(
+                                            "Error: the shell command was not available.".to_owned(),
+                                        );
+                                    }
+                                }
+                                Ok(pi::RequestOutcome::Prompt) => {}
                             }
 
                             running.set(false);
+                            running_bash.set(false);
                             if let Some(input_element) = input_element.cloned() {
                                 let _ = input_element.set_focus(true).await;
                             }
                         });
                     },
-                    span { class: "prompt-mark", aria_hidden: "true", ">_" }
                     input {
-                        aria_label: "Prompt",
+                        aria_label: "Prompt or shell command",
                         autocomplete: "off",
                         autofocus: true,
-                        placeholder: "Ask Pi…",
-                        value: "{input}",
+                        placeholder: "Ask Pi or run !command…",
+                        value: "{input_text}",
                         oninput: move |event| input.set(event.value()),
                         onmounted: move |element| input_element.set(Some(element.data())),
                     }
@@ -506,5 +595,29 @@ fn App() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pi::BashOutcome, render_bash_output};
+
+    #[test]
+    fn renders_bash_exit_and_truncation_details() {
+        let rendered = render_bash_output(
+            "make test",
+            BashOutcome {
+                output: "failed".to_owned(),
+                exit_code: Some(7),
+                cancelled: false,
+                truncated: true,
+                full_output_path: Some("/tmp/full.log".to_owned()),
+            },
+        );
+
+        assert_eq!(
+            rendered,
+            "$ make test\n\nfailed\n[exit 7]\n[output truncated; full output: /tmp/full.log]\n"
+        );
     }
 }
