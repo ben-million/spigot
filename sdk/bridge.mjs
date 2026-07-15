@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { highlightCode } from "./highlight.mjs";
+import { highlightCode, highlightShellOutput } from "./highlight.mjs";
 
 const protocolOutput = process.stdout;
 const stderr = console.error.bind(console);
@@ -115,7 +115,10 @@ function bashOutput(result, error) {
   return output.endsWith(errorSuffix) ? output.slice(0, -errorSuffix.length) : output;
 }
 
-function highlightedToolOutput(toolName, args, result, getLanguageFromPath) {
+function highlightedToolOutput(toolName, args, result, output, getLanguageFromPath) {
+  if (toolName === "bash") {
+    return highlightShellOutput(output, args?.command);
+  }
   if (toolName === "edit") {
     return highlightCode(result?.details?.diff, "diff");
   }
@@ -194,7 +197,7 @@ async function main() {
   let activeRequestId = null;
   let activeAssistantMessageId = 0;
   let activeError = null;
-  const activeReadArgs = new Map();
+  const activeToolArgs = new Map();
 
   function handleControlLine(line) {
     let command;
@@ -258,8 +261,8 @@ async function main() {
         activeError = null;
       }
     } else if (event.type === "tool_execution_start") {
-      if (event.toolName === "read") {
-        activeReadArgs.set(event.toolCallId, event.args);
+      if (event.toolName === "read" || event.toolName === "bash") {
+        activeToolArgs.set(event.toolCallId, event.args);
       }
       emit({
         type: "tool_start",
@@ -270,18 +273,26 @@ async function main() {
       });
     } else if (event.type === "tool_execution_end") {
       const error = event.isError ? conciseError(event.result) : null;
-      const args = activeReadArgs.get(event.toolCallId);
-      const highlightedHtml = event.isError
-        ? null
-        : highlightedToolOutput(event.toolName, args, event.result, getLanguageFromPath);
-      activeReadArgs.delete(event.toolCallId);
+      const args = activeToolArgs.get(event.toolCallId);
+      const output = event.toolName === "bash" ? bashOutput(event.result, error) : null;
+      const highlightedHtml =
+        event.isError && event.toolName !== "bash"
+          ? null
+          : highlightedToolOutput(
+              event.toolName,
+              args,
+              event.result,
+              output,
+              getLanguageFromPath,
+            );
+      activeToolArgs.delete(event.toolCallId);
       emit({
         type: "tool_end",
         id: activeRequestId,
         tool_call_id: event.toolCallId,
         is_error: event.isError,
         error,
-        output: event.toolName === "bash" ? bashOutput(event.result, error) : null,
+        output,
         highlighted_html: highlightedHtml,
       });
     }
@@ -317,7 +328,7 @@ async function main() {
     activeRequestId = id;
     activeAssistantMessageId = 0;
     activeError = null;
-    activeReadArgs.clear();
+    activeToolArgs.clear();
 
     try {
       if (isBash) {
@@ -338,6 +349,7 @@ async function main() {
           cancelled: result.cancelled,
           truncated: result.truncated,
           full_output_path: result.fullOutputPath,
+          highlighted_html: highlightShellOutput(result.output, command.command),
         });
       } else {
         await session.prompt(command.message);
@@ -353,7 +365,7 @@ async function main() {
       activeRequestId = null;
       activeAssistantMessageId = 0;
       activeError = null;
-      activeReadArgs.clear();
+      activeToolArgs.clear();
     }
   }
 

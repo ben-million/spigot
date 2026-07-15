@@ -600,12 +600,13 @@ fn update_shell(
     state: ToolState,
     error: Option<String>,
     output: Option<String>,
+    highlighted_html: Option<String>,
 ) {
     if let Some(TranscriptItem::Tool {
         state: tool_state,
         error: tool_error,
         output: tool_output,
-        highlighted_html,
+        highlighted_html: tool_highlighted_html,
         ..
     }) = transcript
         .iter_mut()
@@ -616,16 +617,34 @@ fn update_shell(
         *tool_error = error;
         if let Some(output) = output {
             *tool_output = output;
-            *highlighted_html = None;
         }
+        *tool_highlighted_html = highlighted_html;
     }
 }
 
-fn render_bash_result(outcome: &pi::BashOutcome) -> String {
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn render_bash_result(outcome: &pi::BashOutcome) -> (String, Option<String>) {
     let mut rendered = if outcome.output.is_empty() {
         "(no output)".to_owned()
     } else {
         outcome.output.clone()
+    };
+    let mut highlighted_html = if outcome.output.is_empty() {
+        None
+    } else {
+        outcome.highlighted_html.clone()
     };
 
     let mut notices = Vec::new();
@@ -645,14 +664,23 @@ fn render_bash_result(outcome: &pi::BashOutcome) -> String {
     }
 
     for notice in notices {
-        if !rendered.ends_with('\n') {
+        let needs_newline = !rendered.ends_with('\n');
+        if needs_newline {
             rendered.push('\n');
         }
         rendered.push_str(&notice);
         rendered.push('\n');
+
+        if let Some(html) = &mut highlighted_html {
+            if needs_newline {
+                html.push('\n');
+            }
+            html.push_str(&escape_html(&notice));
+            html.push('\n');
+        }
     }
 
-    rendered
+    (rendered, highlighted_html)
 }
 
 fn plain_thinking(text: &str) -> &str {
@@ -1055,6 +1083,7 @@ fn App() -> Element {
                                         ToolState::Failed,
                                         Some(error),
                                         None,
+                                        None,
                                     );
                                 } else if !fail_active_tools(&mut items, &error) {
                                     items.push(TranscriptItem::Error(format!("Error: {error}")));
@@ -1074,13 +1103,14 @@ fn App() -> Element {
                                     } else {
                                         ToolState::Complete
                                     };
-                                    let output = render_bash_result(&outcome);
+                                    let (output, highlighted_html) = render_bash_result(&outcome);
                                     update_shell(
                                         &mut transcript.write(),
                                         shell_id,
                                         state,
                                         None,
                                         Some(output),
+                                        highlighted_html,
                                     );
                                 }
                             }
@@ -1375,7 +1405,7 @@ mod tests {
                 is_error: false,
                 error: None,
                 output: Some("hello".to_owned()),
-                highlighted_html: None,
+                highlighted_html: Some("<span>hello</span>".to_owned()),
             },
             None,
         );
@@ -1386,8 +1416,11 @@ mod tests {
                 summary,
                 state: ToolState::Complete,
                 output,
+                highlighted_html: Some(highlighted_html),
                 ..
-            } if summary == "$ printf hello" && output == "hello"
+            } if summary == "$ printf hello"
+                && output == "hello"
+                && highlighted_html == "<span>hello</span>"
         ));
     }
 
@@ -1406,6 +1439,7 @@ mod tests {
             ToolState::Complete,
             None,
             Some("hello".to_owned()),
+            Some("<span>hello</span>".to_owned()),
         );
 
         assert!(matches!(
@@ -1414,24 +1448,34 @@ mod tests {
                 summary,
                 state: ToolState::Complete,
                 output,
+                highlighted_html: Some(highlighted_html),
                 ..
-            } if summary == "$ printf hello" && output == "hello"
+            } if summary == "$ printf hello"
+                && output == "hello"
+                && highlighted_html == "<span>hello</span>"
         ));
     }
 
     #[test]
     fn renders_bash_exit_and_truncation_details() {
-        let rendered = render_bash_result(&BashOutcome {
+        let (rendered, highlighted_html) = render_bash_result(&BashOutcome {
             output: "failed".to_owned(),
             exit_code: Some(7),
             cancelled: false,
             truncated: true,
-            full_output_path: Some("/tmp/full.log".to_owned()),
+            full_output_path: Some("/tmp/full<&>.log".to_owned()),
+            highlighted_html: Some("<span>failed</span>".to_owned()),
         });
 
         assert_eq!(
             rendered,
-            "failed\n[exit 7]\n[output truncated; full output: /tmp/full.log]\n"
+            "failed\n[exit 7]\n[output truncated; full output: /tmp/full<&>.log]\n"
+        );
+        assert_eq!(
+            highlighted_html.as_deref(),
+            Some(
+                "<span>failed</span>\n[exit 7]\n[output truncated; full output: /tmp/full&lt;&amp;&gt;.log]\n"
+            )
         );
     }
 }

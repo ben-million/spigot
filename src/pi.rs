@@ -96,6 +96,7 @@ pub struct BashOutcome {
     pub cancelled: bool,
     pub truncated: bool,
     pub full_output_path: Option<String>,
+    pub highlighted_html: Option<String>,
 }
 
 pub fn new_client() -> SharedPiClient {
@@ -327,6 +328,7 @@ impl PiProcess {
                     cancelled,
                     truncated,
                     full_output_path,
+                    highlighted_html,
                 } if event_id == id => {
                     return match request {
                         BridgeRequest::Bash { .. } => Ok(RequestOutcome::Bash(BashOutcome {
@@ -335,6 +337,7 @@ impl PiProcess {
                             cancelled,
                             truncated,
                             full_output_path,
+                            highlighted_html,
                         })),
                         _ => Err("the Pi SDK bridge returned the wrong completion type".to_owned()),
                     };
@@ -474,6 +477,7 @@ enum BridgeEvent {
         cancelled: bool,
         truncated: bool,
         full_output_path: Option<String>,
+        highlighted_html: Option<String>,
     },
     Error {
         id: Option<u64>,
@@ -559,7 +563,8 @@ mod tests {
             "id": 9,
             "output": "done",
             "cancelled": false,
-            "truncated": false
+            "truncated": false,
+            "highlighted_html": "<span>done</span>"
         }))
         .expect("bash completion should deserialize");
 
@@ -569,12 +574,14 @@ mod tests {
                 output,
                 exit_code,
                 full_output_path,
+                highlighted_html,
                 ..
             } => {
                 assert_eq!(id, 9);
                 assert_eq!(output, "done");
                 assert_eq!(exit_code, None);
                 assert_eq!(full_output_path, None);
+                assert_eq!(highlighted_html.as_deref(), Some("<span>done</span>"));
             }
             event => panic!("expected bash completion, got {event:?}"),
         }
