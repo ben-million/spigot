@@ -11,7 +11,6 @@ const APP_STYLE: &str = r#"
         --doric-bg-main: #ffffff;
         --doric-fg-main: #000000;
         --doric-border: #b0b0b0;
-        --doric-bg-shadow-subtle: #efeff2;
         --doric-fg-shadow-subtle: #5a6268;
         --doric-bg-shadow-intense: #a0bcd0;
         --doric-fg-shadow-intense: #213067;
@@ -28,7 +27,6 @@ const APP_STYLE: &str = r#"
             --doric-bg-main: #000000;
             --doric-fg-main: #ffffff;
             --doric-border: #707070;
-            --doric-bg-shadow-subtle: #332d38;
             --doric-fg-shadow-subtle: #a2a0b2;
             --doric-bg-shadow-intense: #50447f;
             --doric-fg-shadow-intense: #cfcff8;
@@ -62,7 +60,6 @@ const APP_STYLE: &str = r#"
         -webkit-font-smoothing: antialiased;
     }
 
-    button,
     input {
         appearance: none;
         font: inherit;
@@ -104,10 +101,6 @@ const APP_STYLE: &str = r#"
         background: var(--doric-bg-main);
         color: var(--doric-fg-shadow-subtle);
         white-space: nowrap;
-    }
-
-    .side-brand {
-        letter-spacing: 0.05em;
     }
 
     .side-tab {
@@ -254,7 +247,6 @@ const APP_STYLE: &str = r#"
 
     .prompt {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
         min-width: 0;
         min-height: 40px;
         border: 1px solid var(--doric-border);
@@ -263,12 +255,6 @@ const APP_STYLE: &str = r#"
 
     .prompt.is-shell {
         border-color: var(--doric-fg-accent);
-    }
-
-    .prompt.is-shell button:not(:disabled) {
-        border-left-color: var(--doric-border);
-        background: var(--doric-bg-accent);
-        color: var(--doric-fg-accent);
     }
 
     .prompt input {
@@ -289,33 +275,6 @@ const APP_STYLE: &str = r#"
 
     .prompt input:focus-visible {
         box-shadow: inset 0 -2px var(--doric-fg-accent);
-    }
-
-    .prompt button {
-        min-width: 72px;
-        padding: 0 12px;
-        border: 0;
-        border-left: 1px solid var(--doric-border);
-        border-radius: 0;
-        background: var(--doric-bg-shadow-intense);
-        color: var(--doric-fg-shadow-intense);
-        cursor: pointer;
-    }
-
-    .prompt button:not(:disabled):hover {
-        background: var(--doric-bg-accent);
-        color: var(--doric-fg-accent);
-    }
-
-    .prompt button:focus-visible {
-        outline: 2px solid var(--doric-fg-accent);
-        outline-offset: -4px;
-    }
-
-    .prompt button:disabled {
-        background: var(--doric-bg-shadow-subtle);
-        color: var(--doric-fg-shadow-subtle);
-        cursor: default;
     }
 
     @media (max-width: 639px) {
@@ -448,16 +407,6 @@ fn App() -> Element {
         pi::UserRequest::from_input(input_text.clone()),
         pi::UserRequest::Bash { .. }
     );
-    let submit_disabled = is_running || input_text.trim().is_empty();
-    let submit_label = if is_running_bash {
-        "Running…"
-    } else if is_running {
-        "Working…"
-    } else if is_bash_input {
-        "Run"
-    } else {
-        "Send"
-    };
     let status_label = if is_running_bash {
         "RUNNING"
     } else if is_running {
@@ -490,7 +439,6 @@ fn App() -> Element {
         style { {APP_STYLE} }
         main { class: "app",
             aside { class: "side-tabs", aria_label: "Buffers",
-                div { class: "side-cell side-brand", "SPIGOT" }
                 div { class: "side-cell side-tab", "spigot.chat" }
             }
             section { class: "workspace", aria_label: "Spigot chat buffer",
@@ -583,11 +531,6 @@ fn App() -> Element {
                         value: "{input_text}",
                         oninput: move |event| input.set(event.value()),
                         onmounted: move |element| input_element.set(Some(element.data())),
-                    }
-                    button {
-                        r#type: "submit",
-                        disabled: submit_disabled,
-                        "{submit_label}"
                     }
                 }
             }
