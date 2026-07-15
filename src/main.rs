@@ -215,8 +215,12 @@ const APP_STYLE: &str = r#"
     }
 
     .tool-output {
+        max-height: 15em;
         margin-top: 8px;
+        overflow-y: auto;
         color: var(--muted);
+        scrollbar-color: var(--border) transparent;
+        scrollbar-width: thin;
     }
 
     .highlighted-output,
