@@ -26,6 +26,19 @@ const SHELL_LANGUAGES = [
   "yaml",
 ];
 
+export function countDiffLines(diff) {
+  let added = 0;
+  let removed = 0;
+  for (const line of (diff || "").split(/\r?\n/)) {
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      added += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      removed += 1;
+    }
+  }
+  return { added, removed };
+}
+
 export function highlightCode(code, language) {
   if (!code || !language || !hljs.getLanguage(language)) {
     return null;

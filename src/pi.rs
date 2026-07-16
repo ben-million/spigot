@@ -79,6 +79,8 @@ pub enum StreamEvent {
         error: Option<String>,
         output: Option<String>,
         highlighted_html: Option<String>,
+        added: Option<u64>,
+        removed: Option<u64>,
     },
     BashDelta(String),
 }
@@ -304,12 +306,16 @@ impl PiProcess {
                     error,
                     output,
                     highlighted_html,
+                    added,
+                    removed,
                 } if event_id == id => on_event(StreamEvent::ToolEnd {
                     id: tool_call_id,
                     is_error,
                     error,
                     output,
                     highlighted_html,
+                    added,
+                    removed,
                 }),
                 BridgeEvent::BashDelta {
                     id: event_id,
@@ -462,6 +468,8 @@ enum BridgeEvent {
         error: Option<String>,
         output: Option<String>,
         highlighted_html: Option<String>,
+        added: Option<u64>,
+        removed: Option<u64>,
     },
     BashDelta {
         id: u64,
@@ -652,6 +660,32 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_highlighted_tool_end_without_edit_counts() {
+        let event: BridgeEvent = serde_json::from_value(json!({
+            "type": "tool_end",
+            "id": 4,
+            "tool_call_id": "read-1",
+            "is_error": false,
+            "error": null,
+            "output": null,
+            "highlighted_html": "<span>contents</span>"
+        }))
+        .expect("highlighted tool end should deserialize");
+
+        assert!(matches!(
+            event,
+            BridgeEvent::ToolEnd {
+                tool_call_id,
+                output: None,
+                highlighted_html: Some(html),
+                added: None,
+                removed: None,
+                ..
+            } if tool_call_id == "read-1" && html == "<span>contents</span>"
+        ));
+    }
+
+    #[test]
     fn deserializes_tool_lifecycle_events() {
         let start: BridgeEvent = serde_json::from_value(json!({
             "type": "tool_start",
@@ -668,7 +702,9 @@ mod tests {
             "is_error": true,
             "error": "command failed",
             "output": "partial output",
-            "highlighted_html": "<span>highlighted output</span>"
+            "highlighted_html": null,
+            "added": 3,
+            "removed": 2
         }))
         .expect("tool end should deserialize");
 
@@ -691,11 +727,12 @@ mod tests {
                 is_error: true,
                 error: Some(error),
                 output: Some(output),
-                highlighted_html: Some(highlighted_html),
+                highlighted_html: None,
+                added: Some(3),
+                removed: Some(2),
             } if tool_call_id == "call-1"
                 && error == "command failed"
                 && output == "partial output"
-                && highlighted_html == "<span>highlighted output</span>"
         ));
     }
 }

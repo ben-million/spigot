@@ -171,28 +171,63 @@ const APP_STYLE: &str = r#"
         font-style: italic;
     }
 
-    .tool {
+    .tool,
+    .tool-group {
         width: 100%;
+        color: var(--muted);
+        font-family: "Berkeley Mono", ui-monospace, monospace;
+        font-size: 13px;
+    }
+
+    .tool-group {
+        display: grid;
+        gap: 3px;
+    }
+
+    .tool.direct-shell {
         padding: 10px 12px;
         border-radius: 10px;
         background: var(--surface);
-        font-family: "Berkeley Mono", ui-monospace, monospace;
+        color: var(--text);
         font-size: 14px;
+    }
+
+    .tool-group-title {
+        color: var(--text);
+        font-weight: 600;
+    }
+
+    .tool-row {
+        min-width: 0;
+        padding: 1px 0;
+    }
+
+    button.tool-row {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+    }
+
+    button.tool-row:hover {
+        color: var(--text);
     }
 
     .tool-header {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 7px;
         min-width: 0;
-        font-weight: 600;
         overflow-wrap: anywhere;
     }
 
     .tool-dot {
-        width: 7px;
-        height: 7px;
-        flex: 0 0 7px;
+        width: 6px;
+        height: 6px;
+        flex: 0 0 6px;
         border-radius: 50%;
         background: var(--accent);
     }
@@ -201,26 +236,77 @@ const APP_STYLE: &str = r#"
         color: var(--accent);
     }
 
-    .tool.is-error .tool-header,
+    .tool.is-error,
+    .tool-row.is-error,
     .tool-error,
     .error-message {
         color: var(--error);
     }
 
     .tool-error {
-        margin-top: 5px;
+        display: block;
+        margin-left: 13px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
+    .change-count {
+        margin-left: auto;
+        white-space: nowrap;
+    }
+
+    .added {
+        color: var(--syntax-added);
+    }
+
+    .removed {
+        color: var(--syntax-removed);
+    }
+
     .tool-output {
         max-height: 15em;
-        margin-top: 8px;
+        margin: 8px 0 0;
         overflow-y: auto;
         color: var(--muted);
         scrollbar-color: var(--border) transparent;
         scrollbar-width: thin;
+        white-space: pre-wrap;
+    }
+
+    .detail-page {
+        width: 100%;
+        height: 100%;
+        padding: 24px;
+        overflow: auto;
+        background: var(--background);
+        scrollbar-color: var(--border) transparent;
+        scrollbar-width: thin;
+    }
+
+    .detail-title,
+    .detail-output {
+        width: min(100%, 1100px);
+        margin-right: auto;
+        margin-left: auto;
+    }
+
+    .detail-title {
+        margin-top: 0;
+        margin-bottom: 16px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .detail-output {
+        margin-top: 0;
+        margin-bottom: 0;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+        font-family: "Berkeley Mono", ui-monospace, monospace;
+        font-size: 13px;
+        line-height: 1.55;
     }
 
     .highlighted-output,
@@ -378,22 +464,49 @@ enum ToolState {
     Failed,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ToolKind {
+    Exploration,
+    Bash,
+    Edit,
+    Write,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ToolDetailContent {
+    Plain(String),
+    HighlightedHtml(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ToolDetail {
+    title: String,
+    content: ToolDetailContent,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ToolActivity {
+    id: String,
+    kind: ToolKind,
+    summary: String,
+    state: ToolState,
+    error: Option<String>,
+    detail: Option<ToolDetail>,
+    added: Option<u64>,
+    removed: Option<u64>,
+    direct_shell: bool,
+    output: String,
+    highlighted_html: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum TranscriptItem {
     User(String),
     Assistant(String),
-    Thinking {
-        id: String,
-        text: String,
-    },
-    Tool {
-        id: String,
-        summary: String,
-        state: ToolState,
-        error: Option<String>,
-        output: String,
-        highlighted_html: Option<String>,
-    },
+    Thinking { id: String, text: String },
+    Exploration(Vec<ToolActivity>),
+    Tool(ToolActivity),
     Error(String),
 }
 
@@ -411,7 +524,7 @@ fn path_arg(args: &Value) -> &str {
 fn tool_summary(name: &str, args: &Value) -> String {
     match name {
         "read" => {
-            let mut summary = format!("read {}", path_arg(args));
+            let mut summary = format!("Read {}", path_arg(args));
             let offset = args.get("offset").and_then(Value::as_u64);
             let limit = args.get("limit").and_then(Value::as_u64);
             if offset.is_some() || limit.is_some() {
@@ -426,30 +539,91 @@ fn tool_summary(name: &str, args: &Value) -> String {
             }
             summary
         }
-        "bash" => format!("$ {}", string_arg(args, "command").unwrap_or("...")),
-        "edit" => format!("edit {}", path_arg(args)),
-        "write" => format!("write {}", path_arg(args)),
+        "bash" => string_arg(args, "command").unwrap_or("...").to_owned(),
+        "edit" | "write" => path_arg(args).to_owned(),
         "grep" => format!(
-            "grep /{}/ in {}",
+            "Search /{}/ in {}",
             string_arg(args, "pattern").unwrap_or(""),
             string_arg(args, "path")
                 .filter(|path| !path.is_empty())
                 .unwrap_or("."),
         ),
         "find" => format!(
-            "find {} in {}",
+            "Find {} in {}",
             string_arg(args, "pattern").unwrap_or("..."),
             string_arg(args, "path")
                 .filter(|path| !path.is_empty())
                 .unwrap_or("."),
         ),
         "ls" => format!(
-            "ls {}",
+            "List {}",
             string_arg(args, "path")
                 .filter(|path| !path.is_empty())
                 .unwrap_or("."),
         ),
         _ => name.to_owned(),
+    }
+}
+
+fn tool_kind(name: &str) -> ToolKind {
+    match name {
+        "read" | "grep" | "find" | "ls" => ToolKind::Exploration,
+        "bash" => ToolKind::Bash,
+        "edit" => ToolKind::Edit,
+        "write" => ToolKind::Write,
+        _ => ToolKind::Other,
+    }
+}
+
+fn tool_label(tool: &ToolActivity) -> String {
+    if tool.direct_shell {
+        return format!("$ {}", tool.summary);
+    }
+
+    let verb = match (&tool.kind, &tool.state) {
+        (ToolKind::Bash | ToolKind::Other, ToolState::Active) => "Running",
+        (ToolKind::Bash | ToolKind::Other, _) => "Ran",
+        (ToolKind::Edit, ToolState::Active) => "Editing",
+        (ToolKind::Edit, ToolState::Failed) => "Failed to edit",
+        (ToolKind::Edit, ToolState::Complete) => "Edited",
+        (ToolKind::Write, ToolState::Active) => "Writing",
+        (ToolKind::Write, ToolState::Failed) => "Failed to write",
+        (ToolKind::Write, ToolState::Complete) => "Wrote",
+        (ToolKind::Exploration, _) => return tool.summary.clone(),
+    };
+    format!("{verb} {}", tool.summary)
+}
+
+fn detail_from(
+    title: String,
+    output: Option<String>,
+    highlighted_html: Option<String>,
+) -> Option<ToolDetail> {
+    let content = if let Some(html) = highlighted_html.filter(|html| !html.is_empty()) {
+        ToolDetailContent::HighlightedHtml(html)
+    } else {
+        ToolDetailContent::Plain(output.filter(|output| !output.is_empty())?)
+    };
+    Some(ToolDetail { title, content })
+}
+
+fn find_tool_mut<'a>(
+    transcript: &'a mut [TranscriptItem],
+    id: &str,
+) -> Option<&'a mut ToolActivity> {
+    transcript.iter_mut().rev().find_map(|item| match item {
+        TranscriptItem::Tool(tool) if tool.id == id => Some(tool),
+        TranscriptItem::Exploration(tools) => tools.iter_mut().rev().find(|tool| tool.id == id),
+        _ => None,
+    })
+}
+
+fn remove_trailing_empty_assistant(transcript: &mut Vec<TranscriptItem>) {
+    if transcript
+        .last()
+        .is_some_and(|item| matches!(item, TranscriptItem::Assistant(text) if text.is_empty()))
+    {
+        transcript.pop();
     }
 }
 
@@ -463,11 +637,7 @@ fn apply_stream_event(
             transcript.push(TranscriptItem::Assistant(String::new()));
         }
         pi::StreamEvent::ThinkingStart { id } => {
-            if transcript.last().is_some_and(
-                |item| matches!(item, TranscriptItem::Assistant(text) if text.is_empty()),
-            ) {
-                transcript.pop();
-            }
+            remove_trailing_empty_assistant(transcript);
             transcript.push(TranscriptItem::Thinking {
                 id,
                 text: String::new(),
@@ -507,14 +677,30 @@ fn apply_stream_event(
             }
         }
         pi::StreamEvent::ToolStart { id, name, args } => {
-            transcript.push(TranscriptItem::Tool {
+            remove_trailing_empty_assistant(transcript);
+            let kind = tool_kind(&name);
+            let tool = ToolActivity {
                 id,
+                kind: kind.clone(),
                 summary: tool_summary(&name, &args),
                 state: ToolState::Active,
                 error: None,
+                detail: None,
+                added: None,
+                removed: None,
+                direct_shell: false,
                 output: String::new(),
                 highlighted_html: None,
-            });
+            };
+            if kind == ToolKind::Exploration {
+                if let Some(TranscriptItem::Exploration(tools)) = transcript.last_mut() {
+                    tools.push(tool);
+                } else {
+                    transcript.push(TranscriptItem::Exploration(vec![tool]));
+                }
+            } else {
+                transcript.push(TranscriptItem::Tool(tool));
+            }
         }
         pi::StreamEvent::ToolEnd {
             id,
@@ -522,36 +708,26 @@ fn apply_stream_event(
             error,
             output,
             highlighted_html,
+            added,
+            removed,
         } => {
-            if let Some(TranscriptItem::Tool {
-                state,
-                error: tool_error,
-                output: tool_output,
-                highlighted_html: tool_highlighted_html,
-                ..
-            }) = transcript.iter_mut().rev().find(
-                |item| matches!(item, TranscriptItem::Tool { id: tool_id, .. } if tool_id == &id),
-            ) {
-                *state = if is_error {
+            if let Some(tool) = find_tool_mut(transcript, &id) {
+                tool.state = if is_error {
                     ToolState::Failed
                 } else {
                     ToolState::Complete
                 };
-                *tool_error = error;
-                if let Some(output) = output {
-                    *tool_output = output;
-                }
-                *tool_highlighted_html = highlighted_html;
+                tool.error = error;
+                tool.detail = detail_from(tool_label(tool), output, highlighted_html);
+                tool.added = added;
+                tool.removed = removed;
             }
         }
         pi::StreamEvent::BashDelta(delta) => {
             if let Some(shell_id) = shell_id
-                && let Some(TranscriptItem::Tool { output, .. }) = transcript
-                    .iter_mut()
-                    .rev()
-                    .find(|item| matches!(item, TranscriptItem::Tool { id, .. } if id == shell_id))
+                && let Some(tool) = find_tool_mut(transcript, shell_id)
             {
-                output.push_str(&delta);
+                tool.output.push_str(&delta);
             }
         }
     }
@@ -569,16 +745,17 @@ fn fail_active_tools(transcript: &mut [TranscriptItem], error: &str) -> bool {
     let mut marked = false;
 
     for item in transcript {
-        if let TranscriptItem::Tool {
-            state,
-            error: tool_error,
-            ..
-        } = item
-            && *state == ToolState::Active
-        {
-            *state = ToolState::Failed;
-            *tool_error = Some(error.clone());
-            marked = true;
+        let tools: &mut [ToolActivity] = match item {
+            TranscriptItem::Tool(tool) => std::slice::from_mut(tool),
+            TranscriptItem::Exploration(tools) => tools,
+            _ => continue,
+        };
+        for tool in tools {
+            if tool.state == ToolState::Active {
+                tool.state = ToolState::Failed;
+                tool.error = Some(error.clone());
+                marked = true;
+            }
         }
     }
 
@@ -587,14 +764,19 @@ fn fail_active_tools(transcript: &mut [TranscriptItem], error: &str) -> bool {
 
 fn push_shell(transcript: &mut Vec<TranscriptItem>, command: &str) -> String {
     let id = format!("shell-{}", transcript.len());
-    transcript.push(TranscriptItem::Tool {
+    transcript.push(TranscriptItem::Tool(ToolActivity {
         id: id.clone(),
-        summary: format!("$ {command}"),
+        kind: ToolKind::Bash,
+        summary: command.to_owned(),
         state: ToolState::Active,
         error: None,
+        detail: None,
+        added: None,
+        removed: None,
+        direct_shell: true,
         output: String::new(),
         highlighted_html: None,
-    });
+    }));
     id
 }
 
@@ -606,23 +788,13 @@ fn update_shell(
     output: Option<String>,
     highlighted_html: Option<String>,
 ) {
-    if let Some(TranscriptItem::Tool {
-        state: tool_state,
-        error: tool_error,
-        output: tool_output,
-        highlighted_html: tool_highlighted_html,
-        ..
-    }) = transcript
-        .iter_mut()
-        .rev()
-        .find(|item| matches!(item, TranscriptItem::Tool { id: tool_id, .. } if tool_id == id))
-    {
-        *tool_state = state;
-        *tool_error = error;
+    if let Some(tool) = find_tool_mut(transcript, id) {
+        tool.state = state;
+        tool.error = error;
         if let Some(output) = output {
-            *tool_output = output;
+            tool.output = output;
         }
-        *tool_highlighted_html = highlighted_html;
+        tool.highlighted_html = highlighted_html;
     }
 }
 
@@ -694,6 +866,152 @@ fn plain_thinking(text: &str) -> &str {
     text.trim()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DetailOpenMode {
+    FocusedTab,
+    BackgroundTab,
+    Window,
+}
+
+fn detail_open_mode(command: bool, shift: bool) -> DetailOpenMode {
+    match (command, shift) {
+        (true, true) => DetailOpenMode::Window,
+        (true, false) => DetailOpenMode::BackgroundTab,
+        _ => DetailOpenMode::FocusedTab,
+    }
+}
+
+#[component]
+fn ToolDetailView(detail: ToolDetail) -> Element {
+    #[cfg(target_os = "macos")]
+    use_native_tabs();
+
+    rsx! {
+        style { "@font-face {{ font-family: 'InterVariable'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('{INTER_FONT}') format('woff2'); }}" }
+        style { {APP_STYLE} }
+        main { class: "detail-page", aria_label: "Tool detail",
+            h1 { class: "detail-title", "{detail.title}" }
+            match detail.content {
+                ToolDetailContent::HighlightedHtml(html) => rsx! {
+                    pre {
+                        class: "detail-output highlighted-output",
+                        // This HTML is generated locally by highlight.js, which escapes source text.
+                        dangerous_inner_html: html,
+                    }
+                },
+                ToolDetailContent::Plain(text) => rsx! {
+                    pre { class: "detail-output", "{text}" }
+                },
+            }
+        }
+    }
+}
+
+fn open_tool_detail(
+    source: dioxus::desktop::DesktopContext,
+    detail: ToolDetail,
+    mode: DetailOpenMode,
+) {
+    spawn(async move {
+        let title = detail.title.clone();
+        let tab = source
+            .new_window(
+                VirtualDom::new_with_props(ToolDetailView, ToolDetailViewProps { detail }),
+                window_config(&title, mode != DetailOpenMode::BackgroundTab),
+            )
+            .await;
+
+        #[cfg(target_os = "macos")]
+        match mode {
+            DetailOpenMode::FocusedTab => {
+                group_window_as_tab(&source, &tab, true);
+                tab.set_focus();
+            }
+            DetailOpenMode::BackgroundTab => {
+                group_window_as_tab(&source, &tab, false);
+            }
+            DetailOpenMode::Window => tab.set_focus(),
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        if mode != DetailOpenMode::BackgroundTab {
+            tab.set_focus();
+        }
+    });
+}
+
+#[component]
+fn ToolRow(tool: ToolActivity) -> Element {
+    let source = dioxus::desktop::use_window();
+    let label = tool_label(&tool);
+    let class = if tool.state == ToolState::Failed {
+        "tool-row is-error"
+    } else {
+        "tool-row"
+    };
+    let detail = tool.detail.clone();
+    let added = tool.added;
+    let removed = tool.removed;
+
+    let content = rsx! {
+        span { class: "tool-header",
+            if tool.state == ToolState::Active {
+                span { class: "tool-dot", aria_hidden: "true" }
+            }
+            if tool.direct_shell {
+                span {
+                    span { class: "shell-prompt", "$" }
+                    " {tool.summary}"
+                }
+            } else {
+                span { "{label}" }
+            }
+            if added.is_some() || removed.is_some() {
+                span { class: "change-count",
+                    span { class: "added", "+{added.unwrap_or(0)}" }
+                    " "
+                    span { class: "removed", "-{removed.unwrap_or(0)}" }
+                }
+            }
+        }
+        if let Some(error) = &tool.error {
+            span { class: "tool-error", "{error}" }
+        }
+        if tool.direct_shell {
+            if let Some(highlighted_html) = &tool.highlighted_html {
+                pre {
+                    class: "tool-output highlighted-output",
+                    // This HTML is generated locally by highlight.js, which escapes source text.
+                    dangerous_inner_html: highlighted_html,
+                }
+            } else if !tool.output.is_empty() {
+                pre { class: "tool-output", "{tool.output}" }
+            }
+        }
+    };
+
+    if let Some(detail) = detail {
+        rsx! {
+            button {
+                class,
+                type: "button",
+                title: "Open detail",
+                onclick: move |event| {
+                    let modifiers = event.modifiers();
+                    let mode = detail_open_mode(
+                        modifiers.contains(Modifiers::META),
+                        modifiers.contains(Modifiers::SHIFT),
+                    );
+                    open_tool_detail(source.clone(), detail.clone(), mode);
+                },
+                {content}
+            }
+        }
+    } else {
+        rsx! { div { class, {content} } }
+    }
+}
+
 #[component]
 fn TranscriptEntry(item: TranscriptItem) -> Element {
     match item {
@@ -710,47 +1028,29 @@ fn TranscriptEntry(item: TranscriptItem) -> Element {
                 pre { class: "assistant-message thinking-message", "{text}" }
             }
         }
-        TranscriptItem::Tool {
-            summary,
-            state,
-            error,
-            output,
-            highlighted_html,
-            ..
-        } => {
-            let class = if state == ToolState::Failed {
-                "tool is-error"
+        TranscriptItem::Exploration(tools) => {
+            let title = if tools.iter().any(|tool| tool.state == ToolState::Active) {
+                "Exploring"
+            } else {
+                "Explored"
+            };
+            rsx! {
+                div { class: "tool-group",
+                    div { class: "tool-group-title", "{title}" }
+                    for tool in tools {
+                        ToolRow { key: "{tool.id}", tool }
+                    }
+                }
+            }
+        }
+        TranscriptItem::Tool(tool) => {
+            let class = if tool.direct_shell {
+                "tool direct-shell"
             } else {
                 "tool"
             };
             rsx! {
-                div { class,
-                    div { class: "tool-header",
-                        if state == ToolState::Active {
-                            span { class: "tool-dot", aria_hidden: "true" }
-                        }
-                        if let Some(command) = summary.strip_prefix("$ ") {
-                            span {
-                                span { class: "shell-prompt", "$" }
-                                " {command}"
-                            }
-                        } else {
-                            span { "{summary}" }
-                        }
-                    }
-                    if let Some(error) = error {
-                        div { class: "tool-error", "{error}" }
-                    }
-                    if let Some(highlighted_html) = highlighted_html {
-                        // This HTML is generated locally by highlight.js, which escapes source text.
-                        pre {
-                            class: "tool-output highlighted-output",
-                            dangerous_inner_html: highlighted_html,
-                        }
-                    } else if !output.is_empty() {
-                        pre { class: "tool-output", "{output}" }
-                    }
-                }
+                div { class, ToolRow { tool } }
             }
         }
         TranscriptItem::Error(text) => rsx! {
@@ -759,9 +1059,10 @@ fn TranscriptEntry(item: TranscriptItem) -> Element {
     }
 }
 
-fn window_builder() -> dioxus::desktop::WindowBuilder {
+fn window_builder(title: &str, focused: bool) -> dioxus::desktop::WindowBuilder {
     let builder = dioxus::desktop::WindowBuilder::new()
-        .with_title("Spigot")
+        .with_title(title)
+        .with_focused(focused)
         .with_inner_size(LogicalSize::new(760.0, 760.0))
         .with_inner_size_constraints(WindowSizeConstraints::new(
             Some(LogicalUnit::new(420.0).into()),
@@ -887,8 +1188,8 @@ fn install_native_menu() {
     NATIVE_MENU.with(|_| {});
 }
 
-fn window_config() -> dioxus::desktop::Config {
-    let config = dioxus::desktop::Config::new().with_window(window_builder());
+fn window_config(title: &str, focused: bool) -> dioxus::desktop::Config {
+    let config = dioxus::desktop::Config::new().with_window(window_builder(title, focused));
 
     #[cfg(target_os = "macos")]
     let config = config.with_menu(None);
@@ -912,6 +1213,7 @@ fn hide_titlebar_separator(window: &dioxus::desktop::DesktopContext) {
 fn group_window_as_tab(
     source: &dioxus::desktop::DesktopContext,
     tab: &dioxus::desktop::DesktopContext,
+    select_tab: bool,
 ) {
     use dioxus::desktop::tao::platform::macos::WindowExtMacOS;
     use objc2_app_kit::{NSWindow, NSWindowOrderingMode};
@@ -921,6 +1223,13 @@ fn group_window_as_tab(
         let source_window = &*source.window.ns_window().cast::<NSWindow>();
         let tab_window = &*tab.window.ns_window().cast::<NSWindow>();
         source_window.addTabbedWindow_ordered(tab_window, NSWindowOrderingMode::Above);
+        if let Some(group) = source_window.tabGroup() {
+            group.setSelectedWindow(Some(if select_tab {
+                tab_window
+            } else {
+                source_window
+            }));
+        }
     }
 
     hide_titlebar_separator(source);
@@ -946,9 +1255,9 @@ fn use_native_tabs() {
                 let source = source.clone();
                 spawn(async move {
                     let tab = source
-                        .new_window(VirtualDom::new(App), window_config())
+                        .new_window(VirtualDom::new(App), window_config("Spigot", true))
                         .await;
-                    group_window_as_tab(&source, &tab);
+                    group_window_as_tab(&source, &tab, true);
                     tab.set_focus();
                 });
             }
@@ -963,7 +1272,7 @@ fn main() {
     install_native_menu();
 
     dioxus::LaunchBuilder::desktop()
-        .with_cfg(window_config())
+        .with_cfg(window_config("Spigot", true))
         .launch(App);
 }
 
@@ -1144,11 +1453,24 @@ fn App() -> Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        APP_STYLE, ToolState, TranscriptItem, apply_stream_event, fail_active_tools,
-        plain_thinking, push_shell, render_bash_result, tool_summary, update_shell,
+        APP_STYLE, DetailOpenMode, ToolDetailContent, ToolKind, ToolState, TranscriptItem,
+        apply_stream_event, detail_open_mode, fail_active_tools, plain_thinking, push_shell,
+        render_bash_result, tool_label, tool_summary, update_shell,
     };
     use crate::pi::{BashOutcome, StreamEvent};
     use serde_json::json;
+
+    fn end(id: &str, output: Option<&str>, html: Option<&str>) -> StreamEvent {
+        StreamEvent::ToolEnd {
+            id: id.to_owned(),
+            is_error: false,
+            error: None,
+            output: output.map(str::to_owned),
+            highlighted_html: html.map(str::to_owned),
+            added: None,
+            removed: None,
+        }
+    }
 
     #[test]
     fn syntax_highlighting_does_not_set_a_background() {
@@ -1170,41 +1492,36 @@ mod tests {
                 "read",
                 &json!({ "path": "src/main.rs", "offset": 4, "limit": 3 })
             ),
-            "read src/main.rs:4-6"
+            "Read src/main.rs:4-6"
         );
         assert_eq!(
             tool_summary("bash", &json!({ "command": "cargo test" })),
-            "$ cargo test"
+            "cargo test"
         );
         assert_eq!(
             tool_summary("grep", &json!({ "pattern": "TODO", "path": "src" })),
-            "grep /TODO/ in src"
+            "Search /TODO/ in src"
         );
         assert_eq!(
             tool_summary("edit", &json!({ "path": "src/main.rs" })),
-            "edit src/main.rs"
+            "src/main.rs"
         );
         assert_eq!(
             tool_summary("write", &json!({ "path": "README.md" })),
-            "write README.md"
+            "README.md"
         );
         assert_eq!(
             tool_summary("find", &json!({ "pattern": "*.rs", "path": "src" })),
-            "find *.rs in src"
+            "Find *.rs in src"
         );
-        assert_eq!(tool_summary("ls", &json!({})), "ls .");
+        assert_eq!(tool_summary("ls", &json!({})), "List .");
         assert_eq!(tool_summary("custom", &json!({})), "custom");
     }
 
     #[test]
-    fn applies_ordered_assistant_and_parallel_tool_events() {
+    fn groups_exploration_and_matches_parallel_completions_by_id() {
         let mut transcript = vec![TranscriptItem::User("Inspect it".to_owned())];
         apply_stream_event(&mut transcript, StreamEvent::AssistantStart, None);
-        apply_stream_event(
-            &mut transcript,
-            StreamEvent::TextDelta("Looking now.".to_owned()),
-            None,
-        );
         apply_stream_event(
             &mut transcript,
             StreamEvent::ToolStart {
@@ -1225,58 +1542,363 @@ mod tests {
         );
         apply_stream_event(
             &mut transcript,
-            StreamEvent::ToolEnd {
-                id: "read-1".to_owned(),
-                is_error: false,
-                error: None,
-                output: None,
-                highlighted_html: Some("<span class=\"hljs-keyword\">fn</span>".to_owned()),
+            end("grep-1", Some("src/main.rs:1:TODO"), None),
+            None,
+        );
+        apply_stream_event(
+            &mut transcript,
+            end("read-1", None, Some("<span>fn</span>")),
+            None,
+        );
+
+        assert_eq!(transcript.len(), 2);
+        let TranscriptItem::Exploration(tools) = &transcript[1] else {
+            panic!("expected one exploration group")
+        };
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].id, "read-1");
+        assert_eq!(tools[1].id, "grep-1");
+        assert_eq!(tools[0].state, ToolState::Complete);
+        assert!(matches!(
+            tools[0].detail.as_ref().map(|detail| &detail.content),
+            Some(ToolDetailContent::HighlightedHtml(html)) if html == "<span>fn</span>"
+        ));
+        assert!(matches!(
+            tools[1].detail.as_ref().map(|detail| &detail.content),
+            Some(ToolDetailContent::Plain(output)) if output == "src/main.rs:1:TODO"
+        ));
+    }
+
+    #[test]
+    fn exploration_groups_stop_at_text_and_non_exploration_tools() {
+        let mut transcript = Vec::new();
+        for (id, name) in [("read-1", "read"), ("grep-1", "grep")] {
+            apply_stream_event(
+                &mut transcript,
+                StreamEvent::ToolStart {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    args: json!({}),
+                },
+                None,
+            );
+        }
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::TextDelta("Checked those.".to_owned()),
+            None,
+        );
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolStart {
+                id: "find".to_owned(),
+                name: "find".to_owned(),
+                args: json!({}),
+            },
+            None,
+        );
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolStart {
+                id: "bash".to_owned(),
+                name: "bash".to_owned(),
+                args: json!({ "command": "pwd" }),
+            },
+            None,
+        );
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolStart {
+                id: "ls".to_owned(),
+                name: "ls".to_owned(),
+                args: json!({}),
+            },
+            None,
+        );
+
+        assert!(matches!(&transcript[0], TranscriptItem::Exploration(tools) if tools.len() == 2));
+        assert_eq!(
+            transcript[1],
+            TranscriptItem::Assistant("Checked those.".to_owned())
+        );
+        assert!(matches!(&transcript[2], TranscriptItem::Exploration(tools) if tools.len() == 1));
+        assert!(
+            matches!(&transcript[3], TranscriptItem::Tool(tool) if tool.kind == ToolKind::Bash)
+        );
+        assert!(matches!(&transcript[4], TranscriptItem::Exploration(tools) if tools.len() == 1));
+    }
+
+    #[test]
+    fn uses_compact_semantic_state_labels() {
+        let mut transcript = Vec::new();
+        for (id, name, args) in [
+            ("bash", "bash", json!({ "command": "cargo test" })),
+            ("edit", "edit", json!({ "path": "src/main.rs" })),
+            ("write", "write", json!({ "path": "README.md" })),
+        ] {
+            apply_stream_event(
+                &mut transcript,
+                StreamEvent::ToolStart {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    args,
+                },
+                None,
+            );
+        }
+
+        let labels = transcript
+            .iter()
+            .map(|item| match item {
+                TranscriptItem::Tool(tool) => tool_label(tool),
+                _ => panic!("expected standalone tool"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            [
+                "Running cargo test",
+                "Editing src/main.rs",
+                "Writing README.md"
+            ]
+        );
+
+        for id in ["bash", "edit", "write"] {
+            apply_stream_event(&mut transcript, end(id, None, None), None);
+        }
+        let labels = transcript
+            .iter()
+            .map(|item| match item {
+                TranscriptItem::Tool(tool) => tool_label(tool),
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            ["Ran cargo test", "Edited src/main.rs", "Wrote README.md"]
+        );
+    }
+
+    #[test]
+    fn failed_edit_and_write_use_failure_labels() {
+        let mut transcript = Vec::new();
+        for (id, name, path) in [
+            ("edit", "edit", "src/main.rs"),
+            ("write", "write", "README.md"),
+        ] {
+            apply_stream_event(
+                &mut transcript,
+                StreamEvent::ToolStart {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    args: json!({ "path": path }),
+                },
+                None,
+            );
+            apply_stream_event(
+                &mut transcript,
+                StreamEvent::ToolEnd {
+                    id: id.to_owned(),
+                    is_error: true,
+                    error: Some("failed".to_owned()),
+                    output: None,
+                    highlighted_html: None,
+                    added: None,
+                    removed: None,
+                },
+                None,
+            );
+        }
+
+        let labels = transcript
+            .iter()
+            .map(|item| match item {
+                TranscriptItem::Tool(tool) => tool_label(tool),
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            ["Failed to edit src/main.rs", "Failed to write README.md"]
+        );
+    }
+
+    #[test]
+    fn tool_failure_keeps_its_concise_error() {
+        let mut transcript = Vec::new();
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolStart {
+                id: "grep".to_owned(),
+                name: "grep".to_owned(),
+                args: json!({ "pattern": "missing" }),
             },
             None,
         );
         apply_stream_event(
             &mut transcript,
             StreamEvent::ToolEnd {
-                id: "grep-1".to_owned(),
+                id: "grep".to_owned(),
                 is_error: true,
                 error: Some("grep failed".to_owned()),
                 output: None,
                 highlighted_html: None,
+                added: None,
+                removed: None,
             },
             None,
         );
-        apply_stream_event(&mut transcript, StreamEvent::AssistantStart, None);
+
+        let TranscriptItem::Exploration(tools) = &transcript[0] else {
+            unreachable!()
+        };
+        assert_eq!(tools[0].state, ToolState::Failed);
+        assert_eq!(tools[0].error.as_deref(), Some("grep failed"));
+        assert!(tools[0].detail.is_none());
+    }
+
+    #[test]
+    fn keeps_failures_visible_and_marks_all_active_tools() {
+        let mut transcript = Vec::new();
+        for (id, name) in [("read", "read"), ("bash", "bash")] {
+            apply_stream_event(
+                &mut transcript,
+                StreamEvent::ToolStart {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    args: json!({}),
+                },
+                None,
+            );
+        }
+
+        assert!(fail_active_tools(
+            &mut transcript,
+            "request timed out\nmore details"
+        ));
+        for item in &transcript {
+            let tool = match item {
+                TranscriptItem::Exploration(tools) => &tools[0],
+                TranscriptItem::Tool(tool) => {
+                    assert_eq!(tool_label(tool), "Ran ...");
+                    tool
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(tool.state, ToolState::Failed);
+            assert_eq!(tool.error.as_deref(), Some("request timed out"));
+        }
+    }
+
+    #[test]
+    fn agent_output_is_detail_only_and_write_without_detail_is_static() {
+        let mut transcript = Vec::new();
         apply_stream_event(
             &mut transcript,
-            StreamEvent::TextDelta("Finished.".to_owned()),
+            StreamEvent::ToolStart {
+                id: "bash".to_owned(),
+                name: "bash".to_owned(),
+                args: json!({ "command": "printf hello" }),
+            },
             None,
         );
+        apply_stream_event(
+            &mut transcript,
+            end("bash", None, Some("<span>hello</span>")),
+            None,
+        );
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolStart {
+                id: "write".to_owned(),
+                name: "write".to_owned(),
+                args: json!({ "path": "new.txt" }),
+            },
+            None,
+        );
+        apply_stream_event(&mut transcript, end("write", None, None), None);
 
-        assert_eq!(transcript.len(), 5);
-        assert_eq!(
-            transcript[1],
-            TranscriptItem::Assistant("Looking now.".to_owned())
-        );
+        let TranscriptItem::Tool(bash) = &transcript[0] else {
+            unreachable!()
+        };
+        assert!(bash.output.is_empty());
+        assert!(bash.highlighted_html.is_none());
         assert!(matches!(
-            &transcript[2],
-            TranscriptItem::Tool {
-                state: ToolState::Complete,
-                highlighted_html: Some(highlighted_html),
-                ..
-            } if highlighted_html == "<span class=\"hljs-keyword\">fn</span>"
+            bash.detail.as_ref().map(|detail| &detail.content),
+            Some(ToolDetailContent::HighlightedHtml(html)) if html == "<span>hello</span>"
         ));
-        assert!(matches!(
-            &transcript[3],
-            TranscriptItem::Tool {
-                state: ToolState::Failed,
-                error: Some(error),
-                ..
-            } if error == "grep failed"
-        ));
-        assert_eq!(
-            transcript[4],
-            TranscriptItem::Assistant("Finished.".to_owned())
+        let TranscriptItem::Tool(write) = &transcript[1] else {
+            unreachable!()
+        };
+        assert!(write.detail.is_none());
+    }
+
+    #[test]
+    fn records_edit_change_counts() {
+        let mut transcript = Vec::new();
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolStart {
+                id: "edit".to_owned(),
+                name: "edit".to_owned(),
+                args: json!({ "path": "src/main.rs" }),
+            },
+            None,
         );
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::ToolEnd {
+                id: "edit".to_owned(),
+                is_error: false,
+                error: None,
+                output: None,
+                highlighted_html: Some("<span>diff</span>".to_owned()),
+                added: Some(4),
+                removed: Some(2),
+            },
+            None,
+        );
+        let TranscriptItem::Tool(tool) = &transcript[0] else {
+            unreachable!()
+        };
+        assert_eq!((tool.added, tool.removed), (Some(4), Some(2)));
+        assert_eq!(tool.kind, ToolKind::Edit);
+    }
+
+    #[test]
+    fn direct_shell_streams_and_remains_expanded_inline() {
+        let mut transcript = Vec::new();
+        let id = push_shell(&mut transcript, "printf hello");
+        apply_stream_event(
+            &mut transcript,
+            StreamEvent::BashDelta("hello".to_owned()),
+            Some(&id),
+        );
+        update_shell(
+            &mut transcript,
+            &id,
+            ToolState::Complete,
+            None,
+            Some("hello".to_owned()),
+            Some("<span>hello</span>".to_owned()),
+        );
+
+        let TranscriptItem::Tool(tool) = &transcript[0] else {
+            unreachable!()
+        };
+        assert!(tool.direct_shell);
+        assert_eq!(tool_label(tool), "$ printf hello");
+        assert_eq!(tool.output, "hello");
+        assert_eq!(tool.highlighted_html.as_deref(), Some("<span>hello</span>"));
+        assert!(tool.detail.is_none());
+    }
+
+    #[test]
+    fn maps_detail_open_modifiers() {
+        assert_eq!(detail_open_mode(false, false), DetailOpenMode::FocusedTab);
+        assert_eq!(detail_open_mode(false, true), DetailOpenMode::FocusedTab);
+        assert_eq!(detail_open_mode(true, false), DetailOpenMode::BackgroundTab);
+        assert_eq!(detail_open_mode(true, true), DetailOpenMode::Window);
     }
 
     #[test]
@@ -1312,14 +1934,6 @@ mod tests {
         );
         apply_stream_event(
             &mut transcript,
-            StreamEvent::ThinkingDelta {
-                id: "thinking-1".to_owned(),
-                delta: " the details.".to_owned(),
-            },
-            None,
-        );
-        apply_stream_event(
-            &mut transcript,
             StreamEvent::TextDelta("Done.".to_owned()),
             None,
         );
@@ -1343,121 +1957,6 @@ mod tests {
                 TranscriptItem::Assistant("Done.".to_owned()),
             ]
         );
-    }
-
-    #[test]
-    fn request_failure_marks_active_tools_without_a_duplicate_error() {
-        let mut transcript = vec![
-            TranscriptItem::Tool {
-                id: "active".to_owned(),
-                summary: "read src/main.rs".to_owned(),
-                state: ToolState::Active,
-                error: None,
-                output: String::new(),
-                highlighted_html: None,
-            },
-            TranscriptItem::Tool {
-                id: "complete".to_owned(),
-                summary: "ls .".to_owned(),
-                state: ToolState::Complete,
-                error: None,
-                output: String::new(),
-                highlighted_html: None,
-            },
-        ];
-
-        let marked = fail_active_tools(&mut transcript, "request timed out\nmore details");
-        if !marked {
-            transcript.push(TranscriptItem::Error("request timed out".to_owned()));
-        }
-
-        assert!(matches!(
-            &transcript[0],
-            TranscriptItem::Tool {
-                state: ToolState::Failed,
-                error: Some(error),
-                ..
-            } if error == "request timed out"
-        ));
-        assert!(matches!(
-            &transcript[1],
-            TranscriptItem::Tool {
-                state: ToolState::Complete,
-                error: None,
-                ..
-            }
-        ));
-        assert_eq!(transcript.len(), 2);
-    }
-
-    #[test]
-    fn shows_agent_shell_output() {
-        let mut transcript = Vec::new();
-        apply_stream_event(
-            &mut transcript,
-            StreamEvent::ToolStart {
-                id: "bash-1".to_owned(),
-                name: "bash".to_owned(),
-                args: json!({ "command": "printf hello" }),
-            },
-            None,
-        );
-        apply_stream_event(
-            &mut transcript,
-            StreamEvent::ToolEnd {
-                id: "bash-1".to_owned(),
-                is_error: false,
-                error: None,
-                output: Some("hello".to_owned()),
-                highlighted_html: Some("<span>hello</span>".to_owned()),
-            },
-            None,
-        );
-
-        assert!(matches!(
-            &transcript[0],
-            TranscriptItem::Tool {
-                summary,
-                state: ToolState::Complete,
-                output,
-                highlighted_html: Some(highlighted_html),
-                ..
-            } if summary == "$ printf hello"
-                && output == "hello"
-                && highlighted_html == "<span>hello</span>"
-        ));
-    }
-
-    #[test]
-    fn streams_and_completes_standalone_shell_output() {
-        let mut transcript = Vec::new();
-        let id = push_shell(&mut transcript, "printf hello");
-        apply_stream_event(
-            &mut transcript,
-            StreamEvent::BashDelta("hello".to_owned()),
-            Some(&id),
-        );
-        update_shell(
-            &mut transcript,
-            &id,
-            ToolState::Complete,
-            None,
-            Some("hello".to_owned()),
-            Some("<span>hello</span>".to_owned()),
-        );
-
-        assert!(matches!(
-            &transcript[0],
-            TranscriptItem::Tool {
-                summary,
-                state: ToolState::Complete,
-                output,
-                highlighted_html: Some(highlighted_html),
-                ..
-            } if summary == "$ printf hello"
-                && output == "hello"
-                && highlighted_html == "<span>hello</span>"
-        ));
     }
 
     #[test]

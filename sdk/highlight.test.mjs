@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { highlightCode, highlightShellOutput } from "./highlight.mjs";
+import {
+  countDiffLines,
+  highlightCode,
+  highlightShellOutput,
+} from "./highlight.mjs";
 
 test("highlights known code and diff languages", () => {
   const rust = highlightCode('fn main() { println!("hello {}", 42); }', "rust");
@@ -43,6 +47,24 @@ test("escapes source text before it reaches the HTML renderer", () => {
     assert.match(html, /&quot;/);
     assert.match(html, /&amp;/);
   }
+});
+
+test("counts changed lines without counting diff headers", () => {
+  assert.deepEqual(
+    countDiffLines(
+      "--- a/file\n+++ b/file\n@@ -1,2 +1,3 @@\n-old\n+new\n context\n+added\n",
+    ),
+    { added: 2, removed: 1 },
+  );
+  assert.deepEqual(countDiffLines(""), { added: 0, removed: 0 });
+  assert.deepEqual(countDiffLines("--- a/file\n+++ b/file\n+one\n+two\n"), {
+    added: 2,
+    removed: 0,
+  });
+  assert.deepEqual(countDiffLines("--- a/file\n+++ b/file\n-one\n-two\n"), {
+    added: 0,
+    removed: 2,
+  });
 });
 
 test("skips empty output and unknown languages", () => {

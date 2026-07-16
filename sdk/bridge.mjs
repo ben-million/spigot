@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
-import { highlightCode, highlightShellOutput } from "./highlight.mjs";
+import {
+  countDiffLines,
+  highlightCode,
+  highlightShellOutput,
+} from "./highlight.mjs";
 
 const protocolOutput = process.stdout;
 const stderr = console.error.bind(console);
@@ -102,37 +106,55 @@ function conciseError(result) {
   return lines.at(-1)?.trim().slice(0, 500) || "Tool failed";
 }
 
-function bashOutput(result, error) {
+function cleanedTextOutput(result, error) {
   const output = textOutput(result);
   if (!error) {
     return output;
   }
-  if (output === error) {
+  const comparable = output.trimEnd();
+  if (comparable === error) {
     return "";
   }
-
-  const errorSuffix = `\n\n${error}`;
-  return output.endsWith(errorSuffix) ? output.slice(0, -errorSuffix.length) : output;
+  for (const separator of ["\n\n", "\n"]) {
+    const suffix = `${separator}${error}`;
+    if (comparable.endsWith(suffix)) {
+      return comparable.slice(0, -suffix.length);
+    }
+  }
+  return output;
 }
 
-function highlightedToolOutput(toolName, args, result, output, getLanguageFromPath) {
+function toolDetail(toolName, args, result, error, getLanguageFromPath) {
+  let output = "";
+  let isDiff = false;
   if (toolName === "bash") {
-    return highlightShellOutput(output, args?.command);
-  }
-  if (toolName === "edit") {
-    return highlightCode(result?.details?.diff, "diff");
-  }
-  if (toolName !== "read") {
-    return null;
+    output = cleanedTextOutput(result, error);
+  } else if (toolName === "edit") {
+    const diff = result?.details?.diff;
+    isDiff = typeof diff === "string" && diff.length > 0;
+    output = isDiff ? diff : cleanedTextOutput(result, error);
+  } else if (["read", "grep", "find", "ls"].includes(toolName)) {
+    output = cleanedTextOutput(result, error);
   }
 
-  const path = args?.path ?? args?.file_path;
-  if (typeof path !== "string") {
-    return null;
+  let highlightedHtml = null;
+  if (output && toolName === "bash") {
+    highlightedHtml = highlightShellOutput(output, args?.command);
+  } else if (output && isDiff) {
+    highlightedHtml = highlightCode(output, "diff");
+  } else if (output && toolName === "read") {
+    const path = args?.path ?? args?.file_path;
+    if (typeof path === "string") {
+      const fileName = path.split(/[\\/]/).at(-1);
+      const language = getLanguageFromPath(path) ?? getLanguageFromPath(fileName);
+      highlightedHtml = highlightCode(output, language);
+    }
   }
-  const fileName = path.split(/[\\/]/).at(-1);
-  const language = getLanguageFromPath(path) ?? getLanguageFromPath(fileName);
-  return highlightCode(textOutput(result), language);
+
+  return {
+    output: highlightedHtml ? null : output || null,
+    highlightedHtml,
+  };
 }
 
 function toolSummaryArgs(toolName, args) {
@@ -274,17 +296,17 @@ async function main() {
     } else if (event.type === "tool_execution_end") {
       const error = event.isError ? conciseError(event.result) : null;
       const args = activeToolArgs.get(event.toolCallId);
-      const output = event.toolName === "bash" ? bashOutput(event.result, error) : null;
-      const highlightedHtml =
-        event.isError && event.toolName !== "bash"
-          ? null
-          : highlightedToolOutput(
-              event.toolName,
-              args,
-              event.result,
-              output,
-              getLanguageFromPath,
-            );
+      const detail = toolDetail(
+        event.toolName,
+        args,
+        event.result,
+        error,
+        getLanguageFromPath,
+      );
+      const diff =
+        event.toolName === "edit" && typeof event.result?.details?.diff === "string"
+          ? countDiffLines(event.result.details.diff)
+          : null;
       activeToolArgs.delete(event.toolCallId);
       emit({
         type: "tool_end",
@@ -292,8 +314,10 @@ async function main() {
         tool_call_id: event.toolCallId,
         is_error: event.isError,
         error,
-        output,
-        highlighted_html: highlightedHtml,
+        output: detail.output,
+        highlighted_html: detail.highlightedHtml,
+        added: diff?.added ?? null,
+        removed: diff?.removed ?? null,
       });
     }
   });
