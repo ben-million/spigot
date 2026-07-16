@@ -171,63 +171,55 @@ const APP_STYLE: &str = r#"
         font-style: italic;
     }
 
-    .tool,
-    .tool-group {
-        width: 100%;
-        color: var(--muted);
-        font-family: "Berkeley Mono", ui-monospace, monospace;
-        font-size: 13px;
-    }
-
     .tool-group {
         display: grid;
-        gap: 3px;
+        gap: 18px;
+        width: 100%;
     }
 
-    .tool.direct-shell {
+    .tool {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        margin: 0;
         padding: 10px 12px;
+        border: 0;
         border-radius: 10px;
         background: var(--surface);
         color: var(--text);
+        font-family: "Berkeley Mono", ui-monospace, monospace;
         font-size: 14px;
-    }
-
-    .tool-group-title {
-        color: var(--text);
-        font-weight: 600;
-    }
-
-    .tool-row {
-        min-width: 0;
-        padding: 1px 0;
-    }
-
-    button.tool-row {
-        width: 100%;
-        border: 0;
-        background: transparent;
-        color: inherit;
-        font: inherit;
+        line-height: 1.5;
         text-align: left;
+    }
+
+    button.tool {
+        appearance: none;
         cursor: pointer;
     }
 
-    button.tool-row:hover {
-        color: var(--text);
+    button.tool:hover {
+        background: var(--surface-hover);
+    }
+
+    button.tool:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
     }
 
     .tool-header {
         display: flex;
         align-items: center;
-        gap: 7px;
+        gap: 8px;
         min-width: 0;
+        font-weight: 600;
         overflow-wrap: anywhere;
     }
 
     .tool-dot {
-        width: 6px;
-        height: 6px;
-        flex: 0 0 6px;
+        width: 7px;
+        height: 7px;
+        flex: 0 0 7px;
         border-radius: 50%;
         background: var(--accent);
     }
@@ -236,8 +228,7 @@ const APP_STYLE: &str = r#"
         color: var(--accent);
     }
 
-    .tool.is-error,
-    .tool-row.is-error,
+    .tool.is-error .tool-header,
     .tool-error,
     .error-message {
         color: var(--error);
@@ -245,7 +236,7 @@ const APP_STYLE: &str = r#"
 
     .tool-error {
         display: block;
-        margin-left: 13px;
+        margin-top: 5px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -524,7 +515,7 @@ fn path_arg(args: &Value) -> &str {
 fn tool_summary(name: &str, args: &Value) -> String {
     match name {
         "read" => {
-            let mut summary = format!("Read {}", path_arg(args));
+            let mut summary = format!("read {}", path_arg(args));
             let offset = args.get("offset").and_then(Value::as_u64);
             let limit = args.get("limit").and_then(Value::as_u64);
             if offset.is_some() || limit.is_some() {
@@ -540,23 +531,24 @@ fn tool_summary(name: &str, args: &Value) -> String {
             summary
         }
         "bash" => string_arg(args, "command").unwrap_or("...").to_owned(),
-        "edit" | "write" => path_arg(args).to_owned(),
+        "edit" => format!("edit {}", path_arg(args)),
+        "write" => format!("write {}", path_arg(args)),
         "grep" => format!(
-            "Search /{}/ in {}",
+            "grep /{}/ in {}",
             string_arg(args, "pattern").unwrap_or(""),
             string_arg(args, "path")
                 .filter(|path| !path.is_empty())
                 .unwrap_or("."),
         ),
         "find" => format!(
-            "Find {} in {}",
+            "find {} in {}",
             string_arg(args, "pattern").unwrap_or("..."),
             string_arg(args, "path")
                 .filter(|path| !path.is_empty())
                 .unwrap_or("."),
         ),
         "ls" => format!(
-            "List {}",
+            "ls {}",
             string_arg(args, "path")
                 .filter(|path| !path.is_empty())
                 .unwrap_or("."),
@@ -576,22 +568,11 @@ fn tool_kind(name: &str) -> ToolKind {
 }
 
 fn tool_label(tool: &ToolActivity) -> String {
-    if tool.direct_shell {
-        return format!("$ {}", tool.summary);
+    if tool.kind == ToolKind::Bash {
+        format!("$ {}", tool.summary)
+    } else {
+        tool.summary.clone()
     }
-
-    let verb = match (&tool.kind, &tool.state) {
-        (ToolKind::Bash | ToolKind::Other, ToolState::Active) => "Running",
-        (ToolKind::Bash | ToolKind::Other, _) => "Ran",
-        (ToolKind::Edit, ToolState::Active) => "Editing",
-        (ToolKind::Edit, ToolState::Failed) => "Failed to edit",
-        (ToolKind::Edit, ToolState::Complete) => "Edited",
-        (ToolKind::Write, ToolState::Active) => "Writing",
-        (ToolKind::Write, ToolState::Failed) => "Failed to write",
-        (ToolKind::Write, ToolState::Complete) => "Wrote",
-        (ToolKind::Exploration, _) => return tool.summary.clone(),
-    };
-    format!("{verb} {}", tool.summary)
 }
 
 fn detail_from(
@@ -929,6 +910,7 @@ fn open_tool_detail(
             }
             DetailOpenMode::BackgroundTab => {
                 group_window_as_tab(&source, &tab, false);
+                source.set_focus();
             }
             DetailOpenMode::Window => tab.set_focus(),
         }
@@ -945,9 +927,9 @@ fn ToolRow(tool: ToolActivity) -> Element {
     let source = dioxus::desktop::use_window();
     let label = tool_label(&tool);
     let class = if tool.state == ToolState::Failed {
-        "tool-row is-error"
+        "tool is-error"
     } else {
-        "tool-row"
+        "tool"
     };
     let detail = tool.detail.clone();
     let added = tool.added;
@@ -958,10 +940,10 @@ fn ToolRow(tool: ToolActivity) -> Element {
             if tool.state == ToolState::Active {
                 span { class: "tool-dot", aria_hidden: "true" }
             }
-            if tool.direct_shell {
+            if let Some(command) = label.strip_prefix("$ ") {
                 span {
                     span { class: "shell-prompt", "$" }
-                    " {tool.summary}"
+                    " {command}"
                 }
             } else {
                 span { "{label}" }
@@ -1028,31 +1010,16 @@ fn TranscriptEntry(item: TranscriptItem) -> Element {
                 pre { class: "assistant-message thinking-message", "{text}" }
             }
         }
-        TranscriptItem::Exploration(tools) => {
-            let title = if tools.iter().any(|tool| tool.state == ToolState::Active) {
-                "Exploring"
-            } else {
-                "Explored"
-            };
-            rsx! {
-                div { class: "tool-group",
-                    div { class: "tool-group-title", "{title}" }
-                    for tool in tools {
-                        ToolRow { key: "{tool.id}", tool }
-                    }
+        TranscriptItem::Exploration(tools) => rsx! {
+            div { class: "tool-group",
+                for tool in tools {
+                    ToolRow { key: "{tool.id}", tool }
                 }
             }
-        }
-        TranscriptItem::Tool(tool) => {
-            let class = if tool.direct_shell {
-                "tool direct-shell"
-            } else {
-                "tool"
-            };
-            rsx! {
-                div { class, ToolRow { tool } }
-            }
-        }
+        },
+        TranscriptItem::Tool(tool) => rsx! {
+            ToolRow { tool }
+        },
         TranscriptItem::Error(text) => rsx! {
             div { class: "error-message", "{text}" }
         },
@@ -1473,16 +1440,24 @@ mod tests {
     }
 
     #[test]
-    fn syntax_highlighting_does_not_set_a_background() {
-        let start = APP_STYLE
+    fn tool_blocks_own_the_syntax_background() {
+        let tool_start = APP_STYLE
+            .find("    .tool {")
+            .expect("tool styles should exist");
+        let tool_end = APP_STYLE[tool_start..]
+            .find("    button.tool")
+            .map(|end| tool_start + end)
+            .expect("tool styles should end before button styles");
+        assert!(APP_STYLE[tool_start..tool_end].contains("background: var(--surface)"));
+
+        let syntax_start = APP_STYLE
             .find("    .highlighted-output")
             .expect("syntax rules should exist");
-        let end = APP_STYLE[start..]
+        let syntax_end = APP_STYLE[syntax_start..]
             .find("    .error-message")
-            .map(|end| start + end)
+            .map(|end| syntax_start + end)
             .expect("syntax rules should end before error styles");
-
-        assert!(!APP_STYLE[start..end].contains("background"));
+        assert!(!APP_STYLE[syntax_start..syntax_end].contains("background"));
     }
 
     #[test]
@@ -1492,7 +1467,7 @@ mod tests {
                 "read",
                 &json!({ "path": "src/main.rs", "offset": 4, "limit": 3 })
             ),
-            "Read src/main.rs:4-6"
+            "read src/main.rs:4-6"
         );
         assert_eq!(
             tool_summary("bash", &json!({ "command": "cargo test" })),
@@ -1500,21 +1475,21 @@ mod tests {
         );
         assert_eq!(
             tool_summary("grep", &json!({ "pattern": "TODO", "path": "src" })),
-            "Search /TODO/ in src"
+            "grep /TODO/ in src"
         );
         assert_eq!(
             tool_summary("edit", &json!({ "path": "src/main.rs" })),
-            "src/main.rs"
+            "edit src/main.rs"
         );
         assert_eq!(
             tool_summary("write", &json!({ "path": "README.md" })),
-            "README.md"
+            "write README.md"
         );
         assert_eq!(
             tool_summary("find", &json!({ "pattern": "*.rs", "path": "src" })),
-            "Find *.rs in src"
+            "find *.rs in src"
         );
-        assert_eq!(tool_summary("ls", &json!({})), "List .");
+        assert_eq!(tool_summary("ls", &json!({})), "ls .");
         assert_eq!(tool_summary("custom", &json!({})), "custom");
     }
 
@@ -1629,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_compact_semantic_state_labels() {
+    fn uses_command_style_tool_labels() {
         let mut transcript = Vec::new();
         for (id, name, args) in [
             ("bash", "bash", json!({ "command": "cargo test" })),
@@ -1656,11 +1631,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            [
-                "Running cargo test",
-                "Editing src/main.rs",
-                "Writing README.md"
-            ]
+            ["$ cargo test", "edit src/main.rs", "write README.md"]
         );
 
         for id in ["bash", "edit", "write"] {
@@ -1675,12 +1646,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            ["Ran cargo test", "Edited src/main.rs", "Wrote README.md"]
+            ["$ cargo test", "edit src/main.rs", "write README.md"]
         );
     }
 
     #[test]
-    fn failed_edit_and_write_use_failure_labels() {
+    fn failed_tools_keep_command_style_labels() {
         let mut transcript = Vec::new();
         for (id, name, path) in [
             ("edit", "edit", "src/main.rs"),
@@ -1717,10 +1688,7 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            labels,
-            ["Failed to edit src/main.rs", "Failed to write README.md"]
-        );
+        assert_eq!(labels, ["edit src/main.rs", "write README.md"]);
     }
 
     #[test]
@@ -1780,7 +1748,7 @@ mod tests {
             let tool = match item {
                 TranscriptItem::Exploration(tools) => &tools[0],
                 TranscriptItem::Tool(tool) => {
-                    assert_eq!(tool_label(tool), "Ran ...");
+                    assert_eq!(tool_label(tool), "$ ...");
                     tool
                 }
                 _ => unreachable!(),

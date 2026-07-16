@@ -27,7 +27,7 @@ SPIGOT_NODE=/absolute/path/to/node cargo run
 SPIGOT_PROMPT_TIMEOUT_SECS=3600 cargo run
 ```
 
-Type a normal message to prompt Pi. Thinking output appears when the selected model supports it and Pi's thinking level is not `off`. Agent tools appear as compact activity; click a row with available detail to open a read-only native tab. Command-click opens it in the background, and Command-Shift-click opens a separate window. Detail views are temporary and are not restored.
+Type a normal message to prompt Pi. Thinking output appears when the selected model supports it and Pi's thinking level is not `off`. Agent tools appear in command-style blocks; click a block with available detail to open a read-only native tab. Command-click opens it in the background, and Command-Shift-click opens a separate window. Detail views are temporary and are not restored.
 
 Prefix input with `!` to run a shell command in the agent working directory; its output is added to Pi's context. Use `!!` to run a command without adding its output to the context. These direct commands keep their expanded streaming output inline. Commands run with the same permissions as Spigot.
 
